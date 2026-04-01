@@ -1,12 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    # Proxmox
-    PROXMOX_IP: str
-    PROXMOX_NODE: str
-    PROXMOX_TOKEN_ID: str
-    PROXMOX_TOKEN_SECRET: str
-    
     # Local AI Endpoints
     OLLAMA_BASE_URL: str
     WHISPER_API_URL: str

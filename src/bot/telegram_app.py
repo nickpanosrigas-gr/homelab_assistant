@@ -2,6 +2,7 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from src.config.settings import settings
+from src.agent.graph import get_llm
 
 # Set up logging so we can see what's happening in the terminal
 logging.basicConfig(
@@ -47,3 +48,25 @@ def build_bot() -> ApplicationBuilder:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     
     return app
+
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Passes standard text messages to the local LLM."""
+    if not await security_check(update):
+        return
+    
+    user_text = update.message.text
+    logger.info(f"Received message: {user_text}")
+    
+    # Send a "typing..." indicator to Telegram so you know it's working
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
+    
+    try:
+        # Get the LLM and ask it the question
+        llm = get_llm()
+        response = llm.invoke(user_text)
+        
+        # Send the LLM's response back to Telegram
+        await update.message.reply_text(response.content)
+    except Exception as e:
+        logger.error(f"Error querying LLM: {e}")
+        await update.message.reply_text("Error: Could not reach the AI. Is the Gaming VM running?")
