@@ -1,6 +1,6 @@
 from langchain_core.tools import tool
 from src.clients.influxdb import InfluxDBClient
-from src.clients.grafana_loki import LokiClient
+from src.clients.loki import LokiClient
 from src.clients.ping import PingClient
 from src.agent import prompts
 
