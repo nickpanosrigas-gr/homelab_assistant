@@ -46,17 +46,18 @@ def handle_incoming_text(message):
     try:
         user_query = message.text
         
-        # ---------------------------------------------------------
-        # TODO: LangGraph Integration goes here in the next step!
-        # Example of how it will look:
-        #
-        # from src.agent.graph import app as agent_app
-        # ai_response = agent_app.invoke({"messages": [("user", user_query)]})
-        # reply_text = ai_response["messages"][-1].content
-        # ---------------------------------------------------------
+        # Import the compiled LangGraph application
+        from src.agent.graph import app as agent_app
         
-        # Placeholder reply until we build the agent.py file
-        reply_text = f"🤖 *Agent Stub:* I received your message: '{user_query}'. (LangGraph integration pending)."
+        # Invoke the graph. 
+        # (Pass an empty context_data dict to satisfy the State requirement)
+        ai_response = agent_app.invoke({
+            "messages": [("user", user_query)],
+            "context_data": {} 
+        })
+        
+        # Extract the final message content from the agent's response list
+        reply_text = ai_response["messages"][-1].content
         
         bot.reply_to(message, reply_text, parse_mode="Markdown")
         

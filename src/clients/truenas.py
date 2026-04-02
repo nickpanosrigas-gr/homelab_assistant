@@ -4,7 +4,7 @@ from src.config.settings import settings
 
 class TrueNASClient:
     def __init__(self):
-        self.base_url = f"http://{settings.TRUENAS_IP}/api/v2.0"
+        self.base_url = f"http://{settings.TRUENAS_URL}/api/v2.0"
         self.headers = {
             "Authorization": f"Bearer {settings.TRUENAS_API_KEY}",
             "Content-Type": "application/json"

@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.2.1",
     "python-dotenv>=1.0.1",
     "pytelegrambotapi>=4.32.0",
+    "langchain-ollama>=1.0.1",
 ]
 
 [dependency-groups]
