@@ -16,25 +16,24 @@ This document serves as the complete architectural blueprint and technical speci
 ## 2. Technology Stack
 
 * **Language:** Python 3.11+
-* **Dependency Management:** `uv` or `Poetry` (modern package management, do not use raw `pip`).
+* **Dependency Management:** `uv` (the modern, extremely fast standard for Python project management).
 * **AI Orchestration:** LangChain and LangGraph (implementing a Supervisor/Mediator state machine pattern).
 * **LLM Backend:** Local Ollama API (`ibm/granite4:micro-h-q8_0`).
 * **Voice-to-Text:** Faster-Whisper Server (CPU-based transcription) running on the Linux Docker Host (VM 120).
-* **Telemetry Sources:** Prometheus (Metrics) and Loki (Logs), already running on the Docker host.
-* **User Interface:** Telegram Bot API (supports text and voice memos).
+* **Telemetry Sources:** InfluxDB (Metrics) and Loki (Logs), running on the Docker host.
+* **User Interface:** Telegram Bot API (supports text, voice memos, and proactive alerts).
 
 ---
 
 ## 3. Domain-Driven Agent Architecture
 
-To prevent LLM context confusion and tool duplication, the LangGraph architecture uses a Supervisor pattern routing to Domain-Specific Sub-Agents, rather than Application-Specific agents.
+To prevent LLM context confusion and tool duplication, the LangGraph architecture uses a Supervisor pattern routing to Domain-Specific Sub-Agents.
 
 | Agent Name | Role & Responsibility | Example Tools Provided |
 | :--- | :--- | :--- |
-| **Main Supervisor** | **The Router.** Analyzes the prompt, checks RAG memory, and delegates to the appropriate domain agent. | *None (Routing only)* |
-| **Virtualization Agent** | **Proxmox Monitor.** Handles the Proxmox Host, Windows VM (130), TrueNAS VM (110), Docker VM (120), and all LXCs (Technitium 200, Jellyfin 210, Ollama 220). | `get_vm_state()`, `get_node_cpu()` |
-| **Container Agent** | **Docker Stack Monitor.** Handles all Dockerized services running inside VM 120 (Arr Stack, n8n, Vaultwarden, Navidrome, Nginx, etc.). | `query_loki(app_name)`, `query_prom(app_name)` |
-| **Storage Agent** | **TrueNAS Monitor.** Handles ZFS pool health, VDEV capacity, and disk I/O on the TrueNAS VM. | `get_zfs_health()`, `get_pool_capacity()` |
+| **Main Supervisor** | **The Router.** Analyzes the prompt and delegates to the appropriate domain agent. | *None (Routing only)* |
+| **Services Agent** | **Container & LXC Monitor.** Handles all Dockerized services and Proxmox LXCs via telemetry and network pings. | `fetch_service_metrics()`, `fetch_service_logs()`, `check_service_status()` |
+| **Storage Agent** | **TrueNAS Monitor.** Handles ZFS pool health, disk SMART data, temperatures, and system alerts via the TrueNAS API. | `check_truenas_pool()`, `check_truenas_disk_temps()`, `check_truenas_alerts()` |
 
 ---
 
@@ -42,24 +41,23 @@ To prevent LLM context confusion and tool duplication, the LangGraph architectur
 
 ### 4.1 Proactive Anomaly Detection (Frequent Cron Job)
 Instead of scraping all APIs sequentially, the system leverages smart aggregation:
-1.  **Hardware Check:** Ping the Ollama API (`OLLAMA_BASE_URL`). (If unresponsive -> `sys.exit(0)`).
-2.  **Metric Filter:** Query Prometheus via PromQL for breached thresholds (e.g., `up == 0`, `cpu_usage_percent > 90 for 5m`).
-3.  **Log Filter:** Query Loki via LogQL for high-severity logs (`{job=~".*"} |= "level=error" or "level=fatal"`) over the last interval.
-4.  **Logic Gate:** If JSON payloads from steps 2 & 3 are empty, exit cleanly. Do not invoke the LLM.
-5.  **LLM Analysis:** Pass the filtered JSON to the LangGraph Supervisor. The LLM summarizes the root cause and sends a Telegram alert.
+1.  **Hardware Check:** Ping the Ollama API. (If unresponsive -> `sys.exit(0)`).
+2.  **Metric Filter:** Query InfluxDB via Flux for breached thresholds (e.g., `usage_percent > 90`).
+3.  **Log Filter:** Query Loki via LogQL for high-severity logs (`{job=~".*"} |= "level=error"`) over the last interval.
+4.  **Logic Gate:** If data is empty, exit cleanly. Do not invoke the LLM.
+5.  **LLM Analysis:** Pass data to the Agent. The AI summarizes the cause and sends a **Telegram Alert** using the `send_telegram_alert` push function.
 
 ### 4.2 Interactive Querying (Telegram Bot Daemon)
 1.  User sends a text or voice message to the Telegram bot.
-2.  *(If Voice)*: Audio is routed to the local Faster-Whisper container API for transcription.
-3.  Message text enters the LangGraph `State` (which retains conversation history).
+2.  *(If Voice)*: Audio is routed to the local Faster-Whisper container for transcription.
+3.  Message enters the LangGraph `State`.
 4.  Supervisor routes to the correct Domain Agent, which uses its tools to fetch live data.
 5.  Agent replies contextually in the Telegram chat.
 
 ### 4.3 The Daily "CIO Digest" (Morning Cron Job)
-1.  Runs daily in the morning.
-2.  Executes 24-hour PromQL/LogQL queries (e.g., 24h average temperatures, storage growth, total error counts).
-3.  Passes data to the Main Supervisor with the prompt: *"Act as an IT Director. Analyze this 24-hour telemetry JSON. Provide a 3-bullet-point executive summary of the homelab's health, highlighting negative trends. Do not execute tools."*
-4.  Pushes the formatted Markdown report to Telegram.
+1.  Runs daily in the morning to execute 24-hour telemetry queries.
+2.  Passes data to the Agent for a "Director level" 3-bullet-point summary.
+3.  Pushes the formatted Markdown report to Telegram.
 
 ---
 
@@ -67,7 +65,7 @@ Instead of scraping all APIs sequentially, the system leverages smart aggregatio
 
 ```text
 homelab_assistant/
-├── pyproject.toml              # Dependency management (uv/Poetry)
+├── pyproject.toml              # Dependency management strictly via `uv`
 ├── .env                        # API Keys, Tokens, IPs
 ├── data/
 │   └── Proxmox.md              # RAG Source Document for baseline memory
@@ -78,21 +76,21 @@ homelab_assistant/
 │   ├── main.py                 # Telegram bot daemon (Entry Point 3)
 │   ├── config/
 │   │   └── settings.py         # Pydantic BaseSettings for env vars
-│   ├── clients/                # API Wrappers
-│   │   ├── proxmox.py          
-│   │   ├── grafana_loki.py     
-│   │   └── prometheus.py       
+│   ├── clients/                # API Wrappers (Fixed Templates)
+│   │   ├── influxdb.py         # Flux queries for Proxmox/Telegraf buckets
+│   │   ├── grafana_loki.py     # LogQL queries
+│   │   ├── truenas.py          # TrueNAS REST API client
+│   │   └── ping.py             # HTTP connectivity tester
 │   ├── bot/                    
-│   │   ├── telegram_app.py     # Bot routing
+│   │   ├── telegram_app.py     # Bot daemon and push notification logic
 │   │   └── whisper_stt.py      # Faster-Whisper API client
 │   └── agent/                  
 │       ├── graph.py            # LangGraph routing logic
 │       ├── state.py            # TypedDict definition
-│       ├── prompts.py          # System prompts for agents
+│       ├── prompts.py          # Centralized System Prompts and Tool Descriptions
 │       └── sub_agents/         # Domain-specific tools
-│           ├── virtualization.py
-│           ├── containers.py
-│           └── storage.py
+│           ├── services.py     # Docker & LXC tools
+│           └── storage.py      # TrueNAS tools
 ```
 
 ---
@@ -100,6 +98,7 @@ homelab_assistant/
 ## 6. Required Configuration & Code Snippets
 
 ### 6.1 Environment Variables (`.env`)
+
 ```env
 # Local AI Endpoints
 OLLAMA_BASE_URL="[http://192.168.1.220:11434](http://192.168.1.220:11434)"
@@ -107,12 +106,20 @@ OLLAMA_MODEL="ibm/granite4:micro-h-q8_0"
 WHISPER_API_URL="[http://192.168.1.120:8000/v1/audio/transcriptions](http://192.168.1.120:8000/v1/audio/transcriptions)"
 
 # Telemetry Endpoints
-PROMETHEUS_URL="[http://192.168.1.120:9090](http://192.168.1.120:9090)"
+INFLUXDB_URL="[http://192.168.1.120:8086](http://192.168.1.120:8086)"
+INFLUXDB_TOKEN="your_token"
+INFLUXDB_ORG="nick"
+INFLUXDB_PROXMOX_BUCKET="proxmox"
+INFLUXDB_DOCKER_BUCKET="telegraf"
 LOKI_URL="[http://192.168.1.120:3100](http://192.168.1.120:3100)"
 
+# Infrastructure
+TRUENAS_IP="192.168.1.110"
+TRUENAS_API_KEY="your_api_key"
+
 # Telegram Bot
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_ALLOWED_USER_ID=
+TELEGRAM_BOT_TOKEN="your_bot_token"
+TELEGRAM_ALLOWED_USER_ID=123456789
 ```
 
 ### 6.2 LangGraph State Definition (`src/agent/state.py`)
@@ -152,7 +159,7 @@ def check_ollama_and_exit():
 
 if __name__ == "__main__":
     check_ollama_and_exit()
-    # Proceed with Prometheus/Loki checks...
+    # Proceed with InfluxDB/Loki checks...
 ```
 
 ### 6.4 Docker Configuration for Voice-to-Text (Add to VM 120 Stack)

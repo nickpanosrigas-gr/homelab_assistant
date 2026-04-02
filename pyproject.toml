@@ -12,6 +12,7 @@ dependencies = [
     "requests>=2.31.0",
     "pydantic-settings>=2.2.1",
     "python-dotenv>=1.0.1",
+    "pytelegrambotapi>=4.32.0",
 ]
 
 [dependency-groups]
