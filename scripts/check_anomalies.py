@@ -34,32 +34,26 @@ def main():
     loki_client = LokiClient()
 
     try:
-        # 2. Metric Filter: Query InfluxDB for breached thresholds
-        # Note: Update the client method if you built a specific anomaly-only query in influxdb.py
+        # 2. Metric & Log Filter
         metric_anomalies = influx_client.get_container_metrics("anomalies_only") 
-        
-        # 3. Log Filter: Query Loki via LogQL for high-severity logs over the last interval
         log_errors = loki_client.get_container_logs('{job=~".*"} |= "level=error"')
     except Exception as e:
         print(f"Telemetry fetch error: {e}")
         sys.exit(1)
 
-    # 4. Logic Gate: If data is empty (no anomalies), exit cleanly. Do not invoke the LLM.
+    # 4. Logic Gate
     if not metric_anomalies and not log_errors:
         print("System nominal. No anomalies detected. Exiting cleanly.")
         sys.exit(0)
 
-    # 5. LLM Analysis
-    # We construct a direct prompt wrapping the telemetry data and pass it to the LangGraph app
-    prompt = (
-        "You are an AIOps assistant. Review the following anomaly data consisting of high metrics and error logs.\n"
-        "Briefly summarize the root cause and identify any failing services. Keep it concise for a push notification.\n\n"
-        f"**Metrics Data:**\n{metric_anomalies}\n\n"
-        f"**Log Errors:**\n{log_errors}"
+    # 5. Import and format the centralized prompt
+    from src.agent.prompts import ANOMALY_DETECTION_PROMPT
+    prompt = ANOMALY_DETECTION_PROMPT.format(
+        metrics=metric_anomalies,
+        logs=log_errors
     )
 
     try:
-        # Pass the raw data into context_data as specified in the README state definition
         ai_response = agent_app.invoke({
             "messages": [("user", prompt)],
             "context_data": {
@@ -70,7 +64,7 @@ def main():
         
         summary = ai_response["messages"][-1].content
         
-        # 6. Push Notification via Telegram Bot Daemon logic
+        # 6. Push Notification
         alert_text = f"🚨 *Proactive Anomaly Detected*\n\n{summary}"
         send_telegram_alert(alert_text)
         print("Alert generated and sent successfully.")

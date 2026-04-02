@@ -16,6 +16,7 @@ from src.bot.telegram_app import send_telegram_alert
 from src.agent.graph import app as agent_app
 from src.clients.influxdb import InfluxDBClient
 from src.clients.truenas import TrueNASClient
+from src.agent.prompts import DAILY_DIGEST_PROMPT
 
 def check_ollama_and_exit():
     """Pings Ollama directly. If unresponsive, assume AI is offline (gaming mode) and exit."""
@@ -42,19 +43,14 @@ def main():
         print(f"Digest telemetry fetch error: {e}")
         sys.exit(1)
 
-    # 3. LLM Analysis - Requesting a Director level summary
-    prompt = (
-        "You are preparing the morning 'CIO Digest' for a homelab environment.\n"
-        "Review the 24-hour telemetry data provided below.\n"
-        "Generate exactly a 3-bullet-point summary highlighting overall system health, storage status, "
-        "and any notable alerts or bottlenecks. Use simple Markdown formatting.\n\n"
-        f"**Services Telemetry:**\n{services_health}\n\n"
-        f"**TrueNAS Pool Health:**\n{pool_health}\n\n"
-        f"**Active System Alerts:**\n{active_alerts}"
+    prompt = DAILY_DIGEST_PROMPT.format(
+        services=services_health,
+        pool=pool_health,
+        alerts=active_alerts
     )
 
     try:
-        # Pass the raw data into context_data to satisfy the typed dict
+        # Pass the structured prompt to the graph
         ai_response = agent_app.invoke({
             "messages": [("user", prompt)],
             "context_data": {
@@ -74,6 +70,6 @@ def main():
     except Exception as e:
         print(f"Agent analysis failed: {e}")
         sys.exit(1)
-
+        
 if __name__ == "__main__":
     main()

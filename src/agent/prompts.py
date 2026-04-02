@@ -46,3 +46,31 @@ Nginx Proxy Manager (service_name="nginx-proxy-manager"), n8n (service_name="n8n
 
 DESC_CHECK_STATUS = """Use to ping a service to check if it is online via HTTP/HTTPS.
 You must provide the full URL (e.g., http://192.168.1.120:5678)."""
+
+# --- Cron Job Prompts ---
+ANOMALY_DETECTION_PROMPT = """You are an AIOps assistant. Review the following anomaly data consisting of high metrics and error logs.
+Briefly summarize the root cause and identify any failing services. Keep it concise for a push notification.
+
+**Metrics Data:**
+{metrics}
+
+**Log Errors:**
+{logs}"""
+
+DAILY_DIGEST_PROMPT = """You are preparing the morning 'CIO Digest' for a homelab environment.
+Review the 24-hour telemetry data provided below. 
+
+TASK:
+Generate EXACTLY a 3-bullet-point summary highlighting overall system health, storage status, and any notable alerts or bottlenecks. 
+Do NOT repeat these instructions. Do NOT output raw JSON. Output ONLY the 3 bullet points using simple Markdown formatting.
+
+<DATA>
+**Services Telemetry:**
+{services}
+
+**TrueNAS Pool Health:**
+{pool}
+
+**Active System Alerts:**
+{alerts}
+</DATA>"""
