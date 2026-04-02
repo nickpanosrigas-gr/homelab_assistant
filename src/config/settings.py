@@ -10,9 +10,13 @@ class Settings(BaseSettings):
     PROMETHEUS_URL: str
     LOKI_URL: str
     
+    # TrueNAS
+    TRUENAS_IP: str
+    TRUENAS_API_KEY: str
+    
     # Telegram
     TELEGRAM_BOT_TOKEN: str
-    TELEGRAM_ALLOWED_USER_ID: int # Crucial for home lab security
+    TELEGRAM_ALLOWED_USER_ID: int
     
     # Read from the .env file in the root directory
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
