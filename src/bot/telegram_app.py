@@ -1,6 +1,8 @@
 import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from langchain_core.messages import HumanMessage
+from src.agent.graph import assistant_app
 from src.config.settings import settings
 from src.agent.graph import get_llm
 
@@ -29,16 +31,28 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles standard text messages (will eventually route to LangGraph)."""
+    """Passes standard text messages to the LangGraph application."""
     if not await security_check(update):
         return
     
     user_text = update.message.text
     logger.info(f"Received message: {user_text}")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
     
-    # TODO: Pass `user_text` to the LangGraph Supervisor!
-    # For now, we just echo to prove the bot works.
-    await update.message.reply_text(f"Received: {user_text} \n(LangGraph routing coming soon!)")
+    try:
+        # 1. Package the user's message into the Graph State
+        inputs = {"messages": [HumanMessage(content=user_text)]}
+        
+        # 2. Run the graph
+        response = assistant_app.invoke(inputs)
+        
+        # 3. Get the final output message from the AI
+        final_message = response["messages"][-1].content
+        
+        await update.message.reply_text(final_message)
+    except Exception as e:
+        logger.error(f"Error executing LangGraph: {e}")
+        await update.message.reply_text(f"System Error: {e}")
 
 def build_bot() -> ApplicationBuilder:
     """Constructs and wires up the Telegram application."""

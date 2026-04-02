@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Local AI Endpoints
     OLLAMA_BASE_URL: str
+    OLLAMA_MODEL: str
     WHISPER_API_URL: str
     
     # Telemetry Endpoints
