@@ -6,7 +6,10 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str
     OLLAMA_NUM_CTX: int
     OLLAMA_TEMPERATURE: float
+    
+    # Whisper
     WHISPER_API_URL: str
+    WHISPER_MODEL: str
     
     # Telemetry Endpoints
     INFLUXDB_URL: str
