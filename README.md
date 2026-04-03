@@ -17,7 +17,7 @@ This document serves as the complete architectural blueprint and technical speci
 
 * **Language:** Python 3.11+
 * **Dependency Management:** `uv` (the modern, extremely fast standard for Python project management).
-* **AI Orchestration:** LangChain and LangGraph (implementing a Supervisor/Mediator state machine pattern).
+* **AI Orchestration:** LangChain and LangGraph (implementing a Hierarchical ReAct pattern).
 * **LLM Backend:** Local Ollama API (`ibm/granite4:micro-h-q8_0`).
 * **Voice-to-Text:** Faster-Whisper Server (CPU-based transcription) running on the Linux Docker Host (VM 120).
 * **Telemetry Sources:** InfluxDB (Metrics) and Loki (Logs), running on the Docker host.
@@ -27,13 +27,12 @@ This document serves as the complete architectural blueprint and technical speci
 
 ## 3. Domain-Driven Agent Architecture
 
-To prevent LLM context confusion and tool duplication, the LangGraph architecture uses a Supervisor pattern routing to Domain-Specific Sub-Agents.
+To maximize speed, minimize token usage, and prevent ReAct hallucination loops, the architecture uses a **Hierarchical Agent Design**:
 
-| Agent Name | Role & Responsibility | Example Tools Provided |
+| Component | Role & Responsibility | Methodology |
 | :--- | :--- | :--- |
-| **Main Supervisor** | **The Router.** Analyzes the prompt and delegates to the appropriate domain agent. | *None (Routing only)* |
-| **Services Agent** | **Container & LXC Monitor.** Handles all Dockerized services and Proxmox LXCs via telemetry and network pings. | `fetch_service_metrics()`, `fetch_service_logs()`, `check_service_status()` |
-| **Storage Agent** | **TrueNAS Monitor.** Handles ZFS pool health, disk SMART data, temperatures, and system alerts via the TrueNAS API. | `check_truenas_pool()`, `check_truenas_disk_temps()`, `check_truenas_alerts()` |
+| **Main Agent** | **The Flexible Router.** Analyzes the user's prompt, references server topology, and selects the right sub-agent to invoke. | Dynamic `create_react_agent` with conversational memory. |
+| **Service Sub-Agents** | **Deterministic Data Gatherers.** Specialized scripts for specific services (e.g., Jellyfin, TrueNAS, Technitium). They execute hardcoded, parallel API checks (pings, logs, metrics) to guarantee accuracy. | "Dumb" Python functions that gather data upfront, ask the local LLM for a structured summary, and return text to the Main Agent. |
 
 ---
 
@@ -51,8 +50,9 @@ Instead of scraping all APIs sequentially, the system leverages smart aggregatio
 1.  User sends a text or voice message to the Telegram bot.
 2.  *(If Voice)*: Audio is routed to the local Faster-Whisper container for transcription.
 3.  Message enters the LangGraph `State`.
-4.  Supervisor routes to the correct Domain Agent, which uses its tools to fetch live data.
-5.  Agent replies contextually in the Telegram chat.
+4.  **Main Agent** analyzes the request and triggers the appropriate deterministic sub-agent tool (e.g., `check_jellyfin()`).
+5.  The sub-agent executes all necessary API calls automatically, synthesizes a localized status report, and passes it back to the Main Agent.
+6.  Main Agent formats the final conversational reply in the Telegram chat.
 
 ### 4.3 The Daily "CIO Digest" (Morning Cron Job)
 1.  Runs daily in the morning to execute 24-hour telemetry queries.
@@ -85,12 +85,16 @@ homelab_assistant/
 │   │   ├── telegram_app.py     # Bot daemon and push notification logic
 │   │   └── whisper_stt.py      # Faster-Whisper API client
 │   └── agent/                  
-│       ├── graph.py            # LangGraph routing logic
-│       ├── state.py            # TypedDict definition
-│       ├── prompts.py          # Centralized System Prompts and Tool Descriptions
-│       └── sub_agents/         # Domain-specific tools
-│           ├── services.py     # Docker & LXC tools
-│           └── storage.py      # TrueNAS tools
+│       ├── graph.py            # LangGraph Main Agent & Tool Binding
+│       ├── state.py            # TypedDict definition (inc. LangGraph internals)
+│       ├── prompts.py          # Centralized System Prompts & Topology Context
+│       └── sub_agents/         # Deterministic data-gathering tools
+│           ├── jellyfin.py     
+│           ├── navidrome.py    
+│           ├── nginx.py        
+│           ├── technitium.py   
+│           ├── truenas.py      
+│           └── vaultwarden.py
 ```
 
 ---
@@ -124,15 +128,23 @@ TELEGRAM_ALLOWED_USER_ID=123456789
 
 ### 6.2 LangGraph State Definition (`src/agent/state.py`)
 ```python
-from typing import TypedDict, Annotated, Sequence
+from typing import Annotated, Sequence
+from typing_extensions import TypedDict, NotRequired
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 class AssistantState(TypedDict):
+    """The core state object passed between LangGraph nodes."""
     # Appends new messages to the existing list (crucial for Telegram chat memory)
     messages: Annotated[Sequence[BaseMessage], add_messages]
+    
     # Used by cronjobs to pass in raw anomaly data without clogging chat history
-    context_data: dict 
+    context_data: NotRequired[dict]
+    
+    # --- LangGraph Internal Keys ---
+    # Required by the prebuilt ReAct agent to prevent infinite loops
+    is_last_step: NotRequired[bool]
+    remaining_steps: NotRequired[int]
 ```
 
 ### 6.3 The Fast-Fail Hardware Check (`scripts/check_anomalies.py`)
