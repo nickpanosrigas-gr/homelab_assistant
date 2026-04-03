@@ -4,6 +4,8 @@ class Settings(BaseSettings):
     # Local AI Endpoints
     OLLAMA_BASE_URL: str
     OLLAMA_MODEL: str
+    OLLAMA_NUM_CTX: int
+    OLLAMA_TEMPERATURE: float
     WHISPER_API_URL: str
     
     # Telemetry Endpoints

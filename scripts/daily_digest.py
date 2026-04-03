@@ -8,7 +8,6 @@ project_root = str(Path(__file__).parent.parent.absolute())
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Load environment variables first
 load_dotenv()
 
 from src.config.settings import settings

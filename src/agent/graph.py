@@ -23,7 +23,8 @@ class GraphState(AssistantState):
 llm = ChatOllama(
     base_url=settings.OLLAMA_BASE_URL,
     model=settings.OLLAMA_MODEL,
-    temperature=0  # Zero temp ensures deterministic routing and tool calls
+    temperature=settings.OLLAMA_TEMPERATURE,
+    num_ctx=settings.OLLAMA_NUM_CTX
 )
 
 # 3. FIXED: The newest versions of LangGraph use 'prompt' for the system instructions
