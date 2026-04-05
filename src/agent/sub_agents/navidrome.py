@@ -7,6 +7,7 @@ from src.clients.loki import LokiClient
 from src.clients.ping import PingClient
 from src.config.settings import settings
 from src.agent.prompts import NAVIDROME_SYSTEM_PROMPT
+from langchain_core.tools import tool
 
 # Initialize clients
 influx_client = InfluxDBClient()
@@ -22,17 +23,21 @@ sub_agent_llm = ChatOllama(
 )
 
 @tool
-def check_navidrome() -> str:
-    """Use this tool to get a complete health assessment of the Navidrome music server. 
-    It checks pings, logs, and container metrics automatically."""
+def check_navidrome(instruction: str) -> str:
+    """Use this tool to interact with the Navidrome music server telemetry (pings, logs, metrics).
+    You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
+    Example instructions: 
+    - 'Provide a general health and status check.'
+    - 'Scan the logs to find the last played song.'
+    - 'Check the metrics to see if RAM usage is spiking.'
+    """
     
-    # 1. Deterministic Data Collection
+    # 1. Deterministic Data Collection (remains exactly the same)
     local_ping = ping_client.ping_service("http://192.168.1.120:4533")
     domain_ping = ping_client.ping_service("https://navidrome.pali.autos")
     logs = loki_client.get_container_logs("navidrome-navidrome-1")
     metrics = influx_client.get_container_metrics("navidrome-navidrome-1")
 
-    # 2. Package telemetry
     telemetry_context = f"""
     [NAVIDROME RAW TELEMETRY DATA]
     1. Local Network Reachability: {local_ping}
@@ -41,13 +46,13 @@ def check_navidrome() -> str:
     4. Recent Log Activity: {logs}
     """
 
-    # 3. Call LLM to summarize
+    # 3. Inject the Main Agent's instruction into the prompt
     prompt = ChatPromptTemplate.from_messages([
         ("system", NAVIDROME_SYSTEM_PROMPT),
-        ("user", "Provide a health assessment for Navidrome based on this telemetry:\n{telemetry}")
+        ("user", "MAIN AGENT INSTRUCTION: {instruction}\n\nExecute the instruction using the following telemetry data:\n{telemetry}")
     ])
 
     chain = prompt | sub_agent_llm
-    result = chain.invoke({"telemetry": telemetry_context})
+    result = chain.invoke({"telemetry": telemetry_context, "instruction": instruction})
     
     return result.content
