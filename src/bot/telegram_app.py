@@ -82,11 +82,41 @@ def process_query_with_agent(message, user_query: str):
     try:
         from src.agent.graph import app as agent_app
         
-        # Invoke the graph (This is the part that takes a while)
-        ai_response = agent_app.invoke({
-            "messages": [("user", user_query)],
-            "context_data": {} 
-        })
+        # --- LANGFUSE INTEGRATION (VERSION 2 SHIM) ---
+        import sys
+        import langchain_core.callbacks.base
+        import langchain_core.agents
+        import langchain_core.documents
+        
+        # Inject fake paths into Python's memory so the old Langfuse V2 SDK 
+        # can successfully find the modern Langchain V1.x modules
+        sys.modules['langchain.callbacks.base'] = langchain_core.callbacks.base
+        sys.modules['langchain.schema.agent'] = langchain_core.agents
+        sys.modules['langchain.schema.document'] = langchain_core.documents
+
+        # Now the V2 import will succeed without the ModuleNotFoundError!
+        from langfuse.callback import CallbackHandler
+        
+        # Initialize a fresh handler for this specific user's message
+        langfuse_handler = CallbackHandler(
+            secret_key=settings.LANGFUSE_SECRET_KEY,
+            public_key=settings.LANGFUSE_PUBLIC_KEY,
+            host=settings.LANGFUSE_HOST,
+            user_id=str(message.from_user.id),
+            session_id=f"telegram_chat_{message.chat.id}"
+        )
+
+        # Invoke the graph with the Langfuse callbacks
+        ai_response = agent_app.invoke(
+            {
+                "messages": [("user", user_query)],
+                "context_data": {} 
+            },
+            config={
+                "callbacks": [langfuse_handler]
+            }
+        )
+        # -----------------------------------------
         
         last_message = ai_response["messages"][-1]
         
@@ -109,8 +139,6 @@ def process_query_with_agent(message, user_query: str):
         # 2. Guarantee the typing thread stops when the work is done
         stop_typing.set()
         typing_thread.join()
-
-
 # ==========================================
 # GOAL 1: The Interactive Daemon (For Chatting)
 # ==========================================
@@ -167,7 +195,7 @@ def start_bot_daemon():
     print(f"Starting Telegram Bot Daemon for User ID: {settings.TELEGRAM_ALLOWED_USER_ID}...")
     bot.infinity_polling()
     
-    # ==========================================
+# ==========================================
 # CHAT ACTION HELPER
 # ==========================================
 def keep_chat_action_alive(chat_id, stop_event, action='typing'):
