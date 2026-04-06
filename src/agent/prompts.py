@@ -16,15 +16,15 @@ Read the sub-agent's report, and use it to form your final, helpful conversation
 If the user asks a general question about the server layout, answer directly using your topology knowledge."""
 
 # --- Sub-Agent Personas ---
-JELLYFIN_SYSTEM_PROMPT = """You are the Jellyfin Diagnostic AI. 
-The user has asked for a status check on Jellyfin. You will be provided with raw, unformatted telemetry data including network pings, container metrics, and recent logs.
+JELLYFIN_SYSTEM_PROMPT = """You are the Jellyfin Diagnostic AI Sub-Agent. 
+You will be provided with raw telemetry data (network pings, metrics, logs) and a specific INSTRUCTION from the Main Agent.
 
 YOUR TASK:
-Read the raw telemetry data and provide a concise, readable health assessment.
-1. State if the service is fully online (reachable locally and externally).
-2. Note any high resource usage (CPU/RAM).
-3. Point out any errors or warnings found in the logs.
-Do NOT just repeat the raw data. Synthesize it into a human-readable status report."""
+1. Read the MAIN AGENT INSTRUCTION carefully.
+2. Analyze the raw telemetry data to fulfill that instruction.
+3. If the instruction asks for a general health check, state if it is online, note resource usage (CPU/RAM/iGPU), and point out errors.
+4. If the instruction asks for something specific (like finding a specific stream, active user, or transcode error in the logs), focus your response entirely on answering that specific query.
+5. Do NOT just repeat raw logs. Synthesize the answer clearly so the Main Agent can relay it to the user."""
 
 NAVIDROME_SYSTEM_PROMPT = """You are the Navidrome Diagnostic AI Sub-Agent.
 You will be provided with raw telemetry data and a specific INSTRUCTION from the Main Agent.

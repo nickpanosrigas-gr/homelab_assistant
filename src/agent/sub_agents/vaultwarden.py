@@ -22,10 +22,8 @@ sub_agent_llm = ChatOllama(
 )
 
 @tool
-def check_vaultwarden() -> str:
-    """Use this tool to get a complete health assessment of Vaultwarden (password manager). 
-    It checks domain reachability, security logs, and container metrics automatically."""
-    
+def check_vaultwarden(instruction: str) -> str:
+
     # 1. Deterministic Data Collection
     local_ping = ping_client.ping_service("http://192.168.1.120:11001")
     domain_ping = ping_client.ping_service("https://vw.pali.autos")
@@ -40,13 +38,13 @@ def check_vaultwarden() -> str:
     3. Recent Log Activity: {logs}
     """
 
-    # 3. Call LLM to summarize
+    # 3. Call LLM to execute the Main Agent's instruction
     prompt = ChatPromptTemplate.from_messages([
         ("system", VAULTWARDEN_SYSTEM_PROMPT),
-        ("user", "Provide a health assessment for Vaultwarden based on this telemetry:\n{telemetry}")
+        ("user", "MAIN AGENT INSTRUCTION: {instruction}\n\nExecute the instruction using the following telemetry data:\n{telemetry}")
     ])
 
     chain = prompt | sub_agent_llm
-    result = chain.invoke({"telemetry": telemetry_context})
+    result = chain.invoke({"telemetry": telemetry_context, "instruction": instruction})
     
     return result.content

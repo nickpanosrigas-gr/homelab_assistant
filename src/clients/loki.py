@@ -9,35 +9,25 @@ class LokiClient:
     def get_container_logs(self, logql_string: str) -> str:
         """
         Use to fetch system logs for troubleshooting. You must provide the exact service name.
-        
-        ALLOWED INPUT MAPPING:
-        - Navidrome = navidrome-navidrome-1
-        - Vaultwarden = vaultwarden
-        - Wireguard = wireguard
-        - Technitium = technitium
-        - Jellyfin = jellyfin
-        ... (etc)
         """
         
-        # DEBUG: See exactly what the AI passed in
         print(f"\n[DEBUG LOKI] AI Input: {repr(logql_string)}")
         
-        # Calculate start time (30 days ago) in nanoseconds
-        thirty_days_ago_ns = int((time.time() - (30 * 24 * 60 * 60)) * 1_000_000_000)
+        # Fetch only the last 24 hours
+        twenty_four_hours_ago_ns = int((time.time() - (24 * 60 * 60)) * 1_000_000_000)
 
-        # Strip any accidental whitespace the AI might have added
         clean_service_name = logql_string.strip()
         
-        # Build the proper LogQL syntax in python
-        # This creates: {service_name="clean_service_name"}
-        query = f'{{service_name="{clean_service_name}"}}'
+        # LogQL Noise Filtering
+        query = f'{{service_name="{clean_service_name}"}} != "healthcheck" != "DEBUG"'
         
         print(f"[DEBUG LOKI] Constructed Query: {query}")
 
         params = {
             "query": query,
-            "limit": 80,
-            "start": str(thirty_days_ago_ns)
+            "limit": 100,
+            "start": str(twenty_four_hours_ago_ns),
+            "direction": "backward"
         }
 
         try:
@@ -55,14 +45,29 @@ class LokiClient:
             
             if not results:
                 print("[DEBUG LOKI] Request succeeded, but Loki returned 0 lines.")
-                return f"No logs found for service: {clean_service_name}"
+                return f"No logs found for service: {clean_service_name} in the last 24 hours."
                 
             formatted_logs = []
+            seen_logs = set()
+            
             for stream in results:
                 for val in stream.get("values", []):
-                    formatted_logs.append(val[1])
+                    log_line = val[1].strip()
+                    
+                    if not log_line:
+                        continue
+                        
+                    # Deduplication
+                    if log_line in seen_logs:
+                        continue
+                        
+                    seen_logs.add(log_line)
+                    formatted_logs.append(log_line)
             
-            print(f"[DEBUG LOKI] Successfully fetched {len(formatted_logs)} log lines.")        
+            # Chronological Sorting
+            formatted_logs.reverse()
+
+            print(f"[DEBUG LOKI] Successfully fetched {len(formatted_logs)} unique log lines.")        
             return "\n".join(formatted_logs)
             
         except requests.exceptions.RequestException as e:

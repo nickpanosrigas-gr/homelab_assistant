@@ -46,7 +46,7 @@ def clean_markdown_for_telegram(text: str) -> str:
 
 
 # ==========================================
-# GOAL 2: The Push Notification (For Cron Jobs)
+# The Push Notification (For Cron Jobs)
 # ==========================================
 def send_telegram_alert(text: str) -> None:
     formatted_text = clean_markdown_for_telegram(text)
@@ -140,7 +140,7 @@ def process_query_with_agent(message, user_query: str):
         stop_typing.set()
         typing_thread.join()
 # ==========================================
-# GOAL 1: The Interactive Daemon (For Chatting)
+# The Interactive Daemon (For Chatting)
 # ==========================================
 @bot.message_handler(content_types=['text'])
 def handle_incoming_text(message):

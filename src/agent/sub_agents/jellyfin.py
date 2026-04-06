@@ -22,14 +22,13 @@ sub_agent_llm = ChatOllama(
 )
 
 @tool
-def check_jellyfin() -> str:
-    """Use this tool to get a complete health assessment of the Jellyfin media server. 
-    It checks pings, logs, and container metrics automatically."""
+def check_jellyfin(instruction: str) -> str:
     
     # 1. Deterministic Data Collection
     local_ping = ping_client.ping_service("http://192.168.1.210:8096")
     domain_ping = ping_client.ping_service("https://jellyfin.pali.autos")
-    logs = loki_client.get_container_logs("jellyfin")
+    app_logs = loki_client.get_container_logs("jellyfin")
+    transcoding_logs = loki_client.get_container_logs("syslog")
     metrics = influx_client.get_container_metrics("jellyfin")
 
     # 2. Package telemetry
@@ -38,17 +37,18 @@ def check_jellyfin() -> str:
     1. Local Network Reachability: {local_ping}
     2. External Domain Reachability: {domain_ping}
     3. Container Metrics (Averages): {metrics}
-    4. Recent Log Activity: {logs}
+    4. Recent App Logs: {app_logs}
+    5. Recent Transcoding Logs (syslog): {transcoding_logs}
     """
 
-    # 3. Call LLM to summarize
+    # 3. Call LLM to execute the Main Agent's instruction
     prompt = ChatPromptTemplate.from_messages([
         ("system", JELLYFIN_SYSTEM_PROMPT),
-        ("user", "Provide a health assessment for Jellyfin based on this telemetry:\n{telemetry}")
+        ("user", "MAIN AGENT INSTRUCTION: {instruction}\n\nExecute the instruction using the following telemetry data:\n{telemetry}")
     ])
 
     chain = prompt | sub_agent_llm
-    result = chain.invoke({"telemetry": telemetry_context})
+    result = chain.invoke({"telemetry": telemetry_context, "instruction": instruction})
     
-    # 4. Return the summary to the Main Agent
+    # 4. Return the result to the Main Agent
     return result.content

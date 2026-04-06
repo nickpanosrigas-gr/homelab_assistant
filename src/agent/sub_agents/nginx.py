@@ -22,9 +22,7 @@ sub_agent_llm = ChatOllama(
 )
 
 @tool
-def check_nginx() -> str:
-    """Use this tool to get a complete health assessment of Nginx Proxy Manager. 
-    It checks reverse proxy reachability, access logs, and container metrics automatically."""
+def check_nginx(instruction: str) -> str:
     
     # 1. Deterministic Data Collection
     local_ping = ping_client.ping_service("http://192.168.1.120:81")
@@ -36,15 +34,15 @@ def check_nginx() -> str:
     [NGINX PROXY MANAGER RAW TELEMETRY DATA]
     1. Local Admin Panel Reachability: {local_ping}
     2. Container Metrics (Averages): {metrics}
-    3. Recent Log Activity (Check for 502/504 errors): {logs}
+    3. Recent Log Activity: {logs}
     """
-    # 3. Call LLM to summarize
+    # 3. Call LLM to execute the Main Agent's instruction
     prompt = ChatPromptTemplate.from_messages([
         ("system", NGINX_SYSTEM_PROMPT),
-        ("user", "Provide a health assessment for Nginx Proxy Manager based on this telemetry:\n{telemetry}")
+        ("user", "MAIN AGENT INSTRUCTION: {instruction}\n\nExecute the instruction using the following telemetry data:\n{telemetry}")
     ])
 
     chain = prompt | sub_agent_llm
-    result = chain.invoke({"telemetry": telemetry_context})
+    result = chain.invoke({"telemetry": telemetry_context, "instruction": instruction})
     
     return result.content
