@@ -6,7 +6,7 @@ from src.clients.influxdb import InfluxDBClient
 from src.clients.loki import LokiClient
 from src.clients.ping import PingClient
 from src.config.settings import settings
-from src.agent.prompts import JELLYFIN_SYSTEM_PROMPT
+from src.agent.prompts import JELLYFIN_SYSTEM_PROMPT, DESC_CHECK_JELLYFIN
 
 # Initialize clients
 influx_client = InfluxDBClient()
@@ -21,7 +21,7 @@ sub_agent_llm = ChatOllama(
     num_ctx=settings.OLLAMA_NUM_CTX
 )
 
-@tool
+@tool(description=DESC_CHECK_JELLYFIN)
 def check_jellyfin(instruction: str) -> str:
     
     # 1. Deterministic Data Collection

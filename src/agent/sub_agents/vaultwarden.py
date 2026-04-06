@@ -6,7 +6,7 @@ from src.clients.influxdb import InfluxDBClient
 from src.clients.loki import LokiClient
 from src.clients.ping import PingClient
 from src.config.settings import settings
-from src.agent.prompts import VAULTWARDEN_SYSTEM_PROMPT
+from src.agent.prompts import VAULTWARDEN_SYSTEM_PROMPT, DESC_CHECK_VAULTWARDEN
 
 # Initialize clients
 influx_client = InfluxDBClient()
@@ -21,7 +21,7 @@ sub_agent_llm = ChatOllama(
     num_ctx=settings.OLLAMA_NUM_CTX
 )
 
-@tool
+@tool(description=DESC_CHECK_VAULTWARDEN)
 def check_vaultwarden(instruction: str) -> str:
 
     # 1. Deterministic Data Collection
@@ -33,9 +33,10 @@ def check_vaultwarden(instruction: str) -> str:
     # 2. Package telemetry
     telemetry_context = f"""
     [VAULTWARDEN RAW TELEMETRY DATA]
-    1. External Domain Reachability: {domain_ping}
-    2. Container Metrics (Averages): {metrics}
-    3. Recent Log Activity: {logs}
+    1. Local Domain Reachability: {local_ping}
+    2. External Domain Reachability: {domain_ping}
+    3. Container Metrics (Averages): {metrics}
+    4. Recent Log Activity: {logs}
     """
 
     # 3. Call LLM to execute the Main Agent's instruction

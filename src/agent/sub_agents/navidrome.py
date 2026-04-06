@@ -1,3 +1,4 @@
+import concurrent.futures
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
@@ -6,8 +7,7 @@ from src.clients.influxdb import InfluxDBClient
 from src.clients.loki import LokiClient
 from src.clients.ping import PingClient
 from src.config.settings import settings
-from src.agent.prompts import NAVIDROME_SYSTEM_PROMPT
-from langchain_core.tools import tool
+from src.agent.prompts import NAVIDROME_SYSTEM_PROMPT, DESC_CHECK_NAVIDROME
 
 # Initialize clients
 influx_client = InfluxDBClient()
@@ -22,22 +22,25 @@ sub_agent_llm = ChatOllama(
     num_ctx=settings.OLLAMA_NUM_CTX
 )
 
-@tool
+@tool(description=DESC_CHECK_NAVIDROME)
 def check_navidrome(instruction: str) -> str:
-    """Use this tool to interact with the Navidrome music server telemetry (pings, logs, metrics).
-    You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
-    Example instructions: 
-    - 'Provide a general health and status check.'
-    - 'Scan the logs to find the last played song.'
-    - 'Check the metrics to see if RAM usage is spiking.'
-    """
-    
-    # 1. Deterministic Data Collection (remains exactly the same)
-    local_ping = ping_client.ping_service("http://192.168.1.120:4533")
-    domain_ping = ping_client.ping_service("https://navidrome.pali.autos")
-    logs = loki_client.get_container_logs("navidrome-navidrome-1")
-    metrics = influx_client.get_container_metrics("navidrome-navidrome-1")
 
+    # 1. Deterministic Data Collection - PARALLELIZED
+    # We use a ThreadPoolExecutor to run all network requests concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        # Submit all tasks to the thread pool simultaneously
+        future_local_ping = executor.submit(ping_client.ping_service, "http://192.168.1.120:4533")
+        future_domain_ping = executor.submit(ping_client.ping_service, "https://navidrome.pali.autos")
+        future_logs = executor.submit(loki_client.get_container_logs, "navidrome-navidrome-1")
+        future_metrics = executor.submit(influx_client.get_container_metrics, "navidrome-navidrome-1")
+
+        # Retrieve the results as soon as they finish
+        local_ping = future_local_ping.result()
+        domain_ping = future_domain_ping.result()
+        logs = future_logs.result()
+        metrics = future_metrics.result()
+
+    # 2. Package telemetry
     telemetry_context = f"""
     [NAVIDROME RAW TELEMETRY DATA]
     1. Local Network Reachability: {local_ping}

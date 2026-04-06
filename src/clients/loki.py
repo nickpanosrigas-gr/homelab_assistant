@@ -13,7 +13,7 @@ class LokiClient:
         
         print(f"\n[DEBUG LOKI] AI Input: {repr(logql_string)}")
         
-        # Fetch only the last 24 hours
+        # Fetch only the last 24 Hours
         twenty_four_hours_ago_ns = int((time.time() - (24 * 60 * 60)) * 1_000_000_000)
 
         clean_service_name = logql_string.strip()

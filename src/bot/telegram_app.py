@@ -14,10 +14,12 @@ bot = telebot.TeleBot(settings.TELEGRAM_BOT_TOKEN)
 def clean_markdown_for_telegram(text: str) -> str:
     """
     Converts standard AI Markdown (GitHub Flavored) into Telegram's strict Markdown format.
+    Automatically intercepts Markdown tables and converts them into mobile-friendly lists.
     """
     if not text:
         return text
         
+    # 1. Handle standard Markdown to Telegram Markdown conversions
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
     text = re.sub(r'^###\s+(.*)', r'*\1*', text, flags=re.MULTILINE)
     text = re.sub(r'^##\s+(.*)', r'*\1*', text, flags=re.MULTILINE)
@@ -25,25 +27,55 @@ def clean_markdown_for_telegram(text: str) -> str:
 
     lines = text.split('\n')
     formatted_lines = []
-    in_table = False
     
+    table_buffer = []
+    
+    def process_table_buffer(buffer):
+        """Helper to convert accumulated table rows into Telegram-friendly cards."""
+        # If it doesn't have a header, separator, and at least one row, return as is.
+        if len(buffer) < 3:
+            return buffer
+            
+        # Extract headers (split by '|' and strip whitespace)
+        headers = [col.strip() for col in buffer[0].split('|')[1:-1]]
+        
+        cards = []
+        # Skip buffer[1] because it is the markdown separator (e.g., |---|---|)
+        for row in buffer[2:]:
+            cols = [col.strip() for col in row.split('|')[1:-1]]
+            card_lines = []
+            
+            for i, col_val in enumerate(cols):
+                header_name = headers[i] if i < len(headers) else "Data"
+                
+                # Make the first column act as a "Title" for the item
+                if i == 0:
+                    card_lines.append(f"🔹 *{col_val}*")
+                # Format subsequent columns as indented bullet points
+                else:
+                    card_lines.append(f"   ▫️ _{header_name}:_ {col_val}")
+                    
+            cards.append("\n".join(card_lines))
+        
+        # Return the joined cards with padding
+        return ["\n" + "\n\n".join(cards) + "\n"]
+
+    # 2. Iterate through text and catch tables
     for line in lines:
         if line.strip().startswith('|') and line.strip().endswith('|'):
-            if not in_table:
-                formatted_lines.append('```text') 
-                in_table = True
-            formatted_lines.append(line)
+            table_buffer.append(line.strip())
         else:
-            if in_table:
-                formatted_lines.append('```') 
-                in_table = False
+            if table_buffer:
+                # We hit the end of a table, process the buffer
+                formatted_lines.extend(process_table_buffer(table_buffer))
+                table_buffer = []
             formatted_lines.append(line)
             
-    if in_table:
-        formatted_lines.append('```')
+    # Flush any remaining table data if the message ends with a table
+    if table_buffer:
+        formatted_lines.extend(process_table_buffer(table_buffer))
         
     return '\n'.join(formatted_lines)
-
 
 # ==========================================
 # The Push Notification (For Cron Jobs)

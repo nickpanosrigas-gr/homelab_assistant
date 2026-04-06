@@ -76,11 +76,41 @@ Technitium handles local network routing and ad-blocking, so prioritize network 
 3. Review the logs specifically for failed DNS resolutions, blocked queries acting abnormally, or blocklist update failures.
 Synthesize the raw data into a human-readable status report."""
 
-SERVICES_SYSTEM_PROMPT = """You are the Services & Container Specialist for a homelab.
-Your job is to diagnose issues with Docker containers and LXC services.
-Always check both metrics (CPU/RAM) and logs if a service is acting up. 
-Do not guess configurations; use your tools to fetch real data. 
-If a service is completely down, use the ping tool to verify network reachability first."""
+# --- Sub-Agent Tool Descriptions ---
+DESC_CHECK_JELLYFIN = """Use this tool to interact with the Jellyfin media server telemetry (pings, logs, metrics).
+You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
+Example instructions: 
+- 'Provide a general health and status check.'
+- 'Scan the logs to see who is currently streaming or if a transcode failed.'
+- 'Check the metrics to see if hardware acceleration is spiking the GPU/CPU.'"""
+
+DESC_CHECK_NAVIDROME = """Use this tool to interact with the Navidrome music server telemetry (pings, logs, metrics).
+You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
+Example instructions: 
+- 'Provide a general health and status check.'
+- 'Scan the logs to find the last played song.'
+- 'Check the metrics to see if RAM usage is spiking.'"""
+
+DESC_CHECK_NGINX = """Use this tool to interact with Nginx Proxy Manager telemetry (reachability, logs, metrics).
+You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
+Example instructions: 
+- 'Provide a general health and status check.'
+- 'Scan the logs specifically for 502 Bad Gateway or 504 Timeout errors.'
+- 'Check if a specific domain or SSL certificate renewal is failing in the logs.'"""
+
+DESC_CHECK_TECHNITIUM = """Use this tool to interact with Technitium Local DNS telemetry (reachability, logs, metrics).
+You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
+Example instructions: 
+- 'Provide a general health and status check.'
+- 'Scan the logs for failed DNS resolutions or blocked queries.'
+- 'Check if the blocklists are failing to update.'"""
+
+DESC_CHECK_VAULTWARDEN = """Use this tool to interact with Vaultwarden password manager telemetry (reachability, logs, metrics).
+You MUST provide a specific 'instruction' detailing what you need the sub-agent to do.
+Example instructions: 
+- 'Provide a general health and status check.'
+- 'Check the logs for failed login attempts or security warnings.'
+- 'Check if database writes or sync issues are appearing in the logs.'"""
 
 # Storage Tool Descriptions
 DESC_CHECK_POOL = """Use this tool to fetch the overall health, status, and topology of the TrueNAS ZFS storage pool. 
