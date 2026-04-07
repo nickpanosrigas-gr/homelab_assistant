@@ -25,20 +25,11 @@ sub_agent_llm = ChatOllama(
 @tool(description=DESC_CHECK_NAVIDROME)
 def check_navidrome(instruction: str) -> str:
 
-    # 1. Deterministic Data Collection - PARALLELIZED
-    # We use a ThreadPoolExecutor to run all network requests concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        # Submit all tasks to the thread pool simultaneously
-        future_local_ping = executor.submit(ping_client.ping_service, "http://192.168.1.120:4533")
-        future_domain_ping = executor.submit(ping_client.ping_service, "https://navidrome.pali.autos")
-        future_logs = executor.submit(loki_client.get_container_logs, "navidrome-navidrome-1")
-        future_metrics = executor.submit(influx_client.get_container_metrics, "navidrome-navidrome-1")
-
-        # Retrieve the results as soon as they finish
-        local_ping = future_local_ping.result()
-        domain_ping = future_domain_ping.result()
-        logs = future_logs.result()
-        metrics = future_metrics.result()
+    # 1. Deterministic Data Collection
+    local_ping = ping_client.ping_service, "http://192.168.1.120:4533"
+    domain_ping = ping_client.ping_service, "https://navidrome.pali.autos"
+    logs = loki_client.get_container_logs, "navidrome-navidrome-1"
+    metrics = influx_client.get_container_metrics, "navidrome-navidrome-1"
 
     # 2. Package telemetry
     telemetry_context = f"""
