@@ -20,12 +20,34 @@ class PingClient:
         - Sonarr Local: http://192.168.1.120:8989
         - qBittorrent Local: http://192.168.1.120:8080
         """
+        print(f"\n[DEBUG PING] AI requested ping for URL: {url}")
+        
         try:
-            # Short timeout so the agent doesn't hang forever on offline services
+            print("[DEBUG PING] Executing GET request with 5s timeout...")
             response = requests.get(url, timeout=5)
+            
+            # Calculate latency in milliseconds - Highly valuable for LLM context!
+            latency_ms = int(response.elapsed.total_seconds() * 1000)
+            
             if response.status_code < 400:
-                return f"SUCCESS: {url} is ONLINE (Status {response.status_code})."
+                llm_payload = f"STATUS: UP | CODE: {response.status_code} | LATENCY: {latency_ms}ms"
+                print(f"[DEBUG PING] Result: {llm_payload}")
+                return llm_payload
             else:
-                return f"WARNING: {url} returned status code {response.status_code}."
+                llm_payload = f"STATUS: DEGRADED | CODE: {response.status_code} | LATENCY: {latency_ms}ms"
+                print(f"[DEBUG PING] Result: {llm_payload}")
+                return llm_payload
+                
+        # Catching specific exceptions gives the LLM precise reasons for failures
+        except requests.exceptions.Timeout:
+            error_msg = "STATUS: DOWN | ERROR: Timeout (Exceeded 5s)"
+            print(f"[DEBUG PING] Result: {error_msg}")
+            return error_msg
+        except requests.exceptions.ConnectionError:
+            error_msg = "STATUS: DOWN | ERROR: Connection Refused or DNS Failure"
+            print(f"[DEBUG PING] Result: {error_msg}")
+            return error_msg
         except requests.exceptions.RequestException as e:
-            return f"ERROR: {url} is UNREACHABLE. Exception: {str(e)}"
+            error_msg = f"STATUS: DOWN | ERROR: {type(e).__name__}"
+            print(f"[DEBUG PING] EXCEPTION CAUGHT: {str(e)}")
+            return error_msg
