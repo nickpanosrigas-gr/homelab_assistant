@@ -2,6 +2,7 @@ from typing import Literal
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.clients.truenas import TrueNASClient
 from src.config.settings import settings
@@ -11,11 +12,18 @@ from src.agent.prompts import TRUENAS_SYSTEM_PROMPT
 truenas = TrueNASClient()
 
 # Initialize a local LLM instance specifically for sub-agent internal reasoning
-sub_agent_llm = ChatOllama(
-    base_url=settings.OLLAMA_BASE_URL,
-    model=settings.OLLAMA_MODEL,
-    temperature=settings.OLLAMA_TEMPERATURE,
-    num_ctx=settings.OLLAMA_NUM_CTX
+# --- Ollama Setup ---
+# llm = ChatOllama(
+#     base_url=settings.OLLAMA_BASE_URL,
+#     model=settings.OLLAMA_MODEL,
+#     temperature=settings.OLLAMA_TEMPERATURE,
+#     num_ctx=settings.OLLAMA_NUM_CTX
+# )
+
+# --- Google Gemini Setup ---
+llm = ChatGoogleGenerativeAI(
+    model=settings.GEMINI_MODEL,
+    google_api_key=settings.GOOGLE_API_KEY
 )
 
 @tool

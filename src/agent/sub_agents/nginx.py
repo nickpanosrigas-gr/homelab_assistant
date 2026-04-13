@@ -15,11 +15,18 @@ loki_client = LokiClient()
 ping_client = PingClient()
 
 # Initialize a local LLM instance specifically for sub-agent internal reasoning
-sub_agent_llm = ChatOllama(
-    base_url=settings.OLLAMA_BASE_URL,
-    model=settings.OLLAMA_MODEL,
-    temperature=settings.OLLAMA_TEMPERATURE,
-    num_ctx=settings.OLLAMA_NUM_CTX
+# --- Ollama Setup ---
+# llm = ChatOllama(
+#     base_url=settings.OLLAMA_BASE_URL,
+#     model=settings.OLLAMA_MODEL,
+#     temperature=settings.OLLAMA_TEMPERATURE,
+#     num_ctx=settings.OLLAMA_NUM_CTX
+# )
+
+# --- Google Gemini Setup ---
+llm = ChatGoogleGenerativeAI(
+    model=settings.GEMINI_MODEL,
+    google_api_key=settings.GOOGLE_API_KEY
 )
 
 @tool(description=DESC_CHECK_NGINX)

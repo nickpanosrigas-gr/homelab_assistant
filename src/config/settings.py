@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     WHISPER_API_URL: str
     WHISPER_MODEL: str
     
+    # Gemini
+    GOOGLE_API_KEY: str
+    GEMINI_MODEL: str
+    
     # Telemetry Endpoints
     INFLUXDB_URL: str
     INFLUXDB_TOKEN: str

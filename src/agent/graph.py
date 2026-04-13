@@ -1,4 +1,5 @@
 from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 
 from src.config.settings import settings
@@ -14,11 +15,18 @@ from src.agent.sub_agents.truenas import check_truenas
 from src.agent.sub_agents.technitium import check_technitium
 
 # Initialize the Main LLM
-llm = ChatOllama(
-    base_url=settings.OLLAMA_BASE_URL,
-    model=settings.OLLAMA_MODEL,
-    temperature=settings.OLLAMA_TEMPERATURE,
-    num_ctx=settings.OLLAMA_NUM_CTX
+# --- Ollama Setup ---
+# llm = ChatOllama(
+#     base_url=settings.OLLAMA_BASE_URL,
+#     model=settings.OLLAMA_MODEL,
+#     temperature=settings.OLLAMA_TEMPERATURE,
+#     num_ctx=settings.OLLAMA_NUM_CTX
+# )
+
+# --- Google Gemini Setup ---
+llm = ChatGoogleGenerativeAI(
+    model=settings.GEMINI_MODEL,
+    google_api_key=settings.GOOGLE_API_KEY
 )
 
 # List of tools the Main Agent can choose from
