@@ -30,14 +30,23 @@ class TrueNASClient:
             # Extract only the essential data to save LLM tokens
             summary = []
             for p in pools:
-                size_tb = p.get("topology", {}).get("data", [{}])[0].get("stats", {}).get("size", 0) / (1024**4)
-                alloc_tb = p.get("topology", {}).get("data", [{}])[0].get("stats", {}).get("allocated", 0) / (1024**4)
+                # Sum up stats across ALL data vdevs (fixes multi-vdev pools)
+                data_vdevs = p.get("topology", {}).get("data", [])
+                
+                size_bytes = sum(vdev.get("stats", {}).get("size", 0) for vdev in data_vdevs)
+                alloc_bytes = sum(vdev.get("stats", {}).get("allocated", 0) for vdev in data_vdevs)
+                
+                size_tb = size_bytes / (1024**4)
+                alloc_tb = alloc_bytes / (1024**4)
+                free_tb = size_tb - alloc_tb
+                
                 summary.append({
                     "name": p.get("name"),
                     "status": p.get("status"),
                     "healthy": p.get("healthy"),
-                    "capacity_tb": round(size_tb, 2),
-                    "used_tb": round(alloc_tb, 2)
+                    "total_capacity_tb": round(size_tb, 2),
+                    "used_tb": round(alloc_tb, 2),
+                    "free_tb": round(free_tb, 2)
                 })
             
             print(f"[DEBUG TRUENAS] Successfully fetched pool health for {len(summary)} pool(s).")

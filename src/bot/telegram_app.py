@@ -2,6 +2,7 @@ import re
 import requests
 import telebot
 import threading
+import ast  # Imported to safely parse stringified dictionaries
 from src.config.settings import settings
 from src.bot.whisper_stt import transcribe_audio  # Import the new transcription module
 
@@ -18,6 +19,11 @@ def clean_markdown_for_telegram(text: str) -> str:
     """
     if not text:
         return text
+        
+    # --- NEW FIX: Handle bullet points BEFORE formatting ---
+    # Convert standard Markdown bullets (*) into actual bullet characters (•)
+    # This stops Telegram from confusing list items with unclosed bold tags.
+    text = re.sub(r'^(\s*)\*\s+', r'\1• ', text, flags=re.MULTILINE)
         
     # 1. Handle standard Markdown to Telegram Markdown conversions
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
@@ -83,7 +89,7 @@ def clean_markdown_for_telegram(text: str) -> str:
 def send_telegram_alert(text: str) -> None:
     formatted_text = clean_markdown_for_telegram(text)
     
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": settings.TELEGRAM_ALLOWED_USER_ID,
         "text": formatted_text,
@@ -91,6 +97,14 @@ def send_telegram_alert(text: str) -> None:
     }
     try:
         response = requests.post(url, json=payload, timeout=10)
+        
+        # --- FALLBACK: If Telegram hates the formatting, strip it and try again ---
+        if response.status_code == 400 and "parse entities" in response.text.lower():
+            print("[DEBUG] Telegram rejected Markdown in alert. Retrying as plain text.")
+            payload.pop("parse_mode") 
+            payload["text"] = f"⚠️ [Markdown stripped due to formatting error]\n\n{formatted_text}"
+            response = requests.post(url, json=payload, timeout=10)
+            
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         print(f"Failed to send Telegram alert: {e}")
@@ -155,22 +169,69 @@ def process_query_with_agent(message, user_query: str):
         if last_message.type == "human":
             reply_text = "I have no action to take for that. (Routed to FINISH)"
         else:
-            reply_text = last_message.content
+            # --- GEMINI CONTENT PARSING FIX ---
+            raw_content = last_message.content
+            reply_text = ""
+            
+            if isinstance(raw_content, list):
+                text_parts = []
+                for item in raw_content:
+                    if isinstance(item, dict) and 'text' in item:
+                        text_parts.append(item['text'])
+                    elif isinstance(item, str):
+                        text_parts.append(item)
+                reply_text = "\n".join(text_parts)
+            elif isinstance(raw_content, dict) and 'text' in raw_content:
+                reply_text = raw_content['text']
+            elif isinstance(raw_content, str):
+                try:
+                    import ast
+                    parsed = ast.literal_eval(raw_content)
+                    if isinstance(parsed, dict) and 'text' in parsed:
+                        reply_text = parsed['text']
+                    elif isinstance(parsed, list):
+                        text_parts = [
+                            item['text'] if isinstance(item, dict) and 'text' in item else str(item)
+                            for item in parsed
+                        ]
+                        reply_text = "\n".join(text_parts)
+                    else:
+                        reply_text = raw_content
+                except (ValueError, SyntaxError):
+                    reply_text = raw_content
+            else:
+                reply_text = str(raw_content)
+            # ----------------------------------
             
         if not reply_text or not str(reply_text).strip():
             print(f"DEBUG: Raw Empty Message Data: {last_message}")
             reply_text = "⚠️ The AI finished its process but returned an empty response."
         
         final_text = clean_markdown_for_telegram(str(reply_text))
-        bot.reply_to(message, final_text, parse_mode="Markdown")
+        
+        # --- TELEGRAM FORMATTING FALLBACK ---
+        try:
+            bot.reply_to(message, final_text, parse_mode="Markdown")
+        except Exception as send_err:
+            if "can't parse entities" in str(send_err).lower() or "bad request" in str(send_err).lower():
+                print(f"[DEBUG] Telegram Markdown parsing failed. Sending plain text. Error: {send_err}")
+                bot.reply_to(message, f"⚠️ [Markdown stripped due to formatting error]\n\n{final_text}")
+            else:
+                raise send_err # It's a real network error, pass it to the main exception block
+        # ------------------------------------
         
     except Exception as e:
-        bot.reply_to(message, f"⚠️ *Error processing request:*\n`{str(e)}`", parse_mode="Markdown")
+        # Also protect the error message itself from unclosed formatting
+        try:
+            bot.reply_to(message, f"⚠️ *Error processing request:*\n`{str(e)}`", parse_mode="Markdown")
+        except:
+            bot.reply_to(message, f"⚠️ Error processing request:\n{str(e)}")
         
     finally:
         # 2. Guarantee the typing thread stops when the work is done
         stop_typing.set()
         typing_thread.join()
+        
 # ==========================================
 # The Interactive Daemon (For Chatting)
 # ==========================================
