@@ -2,6 +2,7 @@ from typing import Literal
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.clients.influxdb import InfluxDBClient
 from src.clients.loki import LokiClient
