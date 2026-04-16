@@ -12,11 +12,11 @@ from src.config.settings import settings
 # -----------------------------------------------------------------------------
 # Python 3.7+ retains dictionary order, so this exact order will be printed
 DISK_TOPOLOGY = {
-    "sdf": {"warn": 45.0, "err": 50.0, "desc": "Exos 16TB HDD Mirror0"},
-    "sdd": {"warn": 45.0, "err": 50.0, "desc": "Sky 16TB HDD Mirror0"},
-    "sde": {"warn": 45.0, "err": 50.0, "desc": "Sky 14TB HDD Mirror1"},
-    "sdc": {"warn": 45.0, "err": 50.0, "desc": "WD 14TB HDD Mirror1"},
-    "sdb": {"warn": 55.0, "err": 65.0, "desc": "500GB SSD Cache0"},
+    "sdf": {"warn": 45.0, "err": 50.0, "desc": "sdf Exos 16TB HDD Mirror0"},
+    "sdd": {"warn": 45.0, "err": 50.0, "desc": "sdd Sky 16TB HDD Mirror0"},
+    "sde": {"warn": 45.0, "err": 50.0, "desc": "sde Sky 14TB HDD Mirror1"},
+    "sdc": {"warn": 45.0, "err": 50.0, "desc": "sdc WD 14TB HDD Mirror1"},
+    "sdb": {"warn": 55.0, "err": 65.0, "desc": "sdb 500GB SSD Cache0"},
 }
 DEFAULT_THRESHOLDS = {"warn": 45.0, "err": 50.0, "desc": "Unknown Disk"}
 
