@@ -6,9 +6,8 @@ This document serves as the complete architectural blueprint and technical speci
 
 ## 1. Core Constraints & Environmental Realities
 
-* **Hardware Bottleneck:** The local LLM runs in an Ollama LXC (ID: 220) using a dynamically passed Nvidia RTX 2070 Super.
-* **The "Gaming Override":** When the Windows 11 Gaming VM (ID: 130) starts, a Proxmox hook script automatically shuts down the Ollama LXC to reclaim the GPU for gaming.
-* **Fast-Fail Requirement:** Because the AI goes offline during gaming sessions, all automated scripts (cron jobs) must first ping the Ollama API directly. If Ollama is unreachable, scripts must immediately execute a clean exit (`sys.exit(0)`) to prevent queue stalling and API timeouts.
+* **Cloud Reasoning / High Availability:** The core reasoning LLM has been migrated to **Gemini 3.1 Flash Lite preview**, ensuring fast inference, large context windows, and continuous uptime regardless of local hardware states.
+* **The "Gaming Override" (Embeddings Only):** The local Ollama LXC (ID: 220) using a dynamically passed Nvidia RTX 2070 Super is now strictly dedicated to generating vector embeddings for the local knowledge base. When the Windows 11 Gaming VM (ID: 130) starts, Ollama is shut down to reclaim the GPU. During this time, the assistant remains fully functional for querying and troubleshooting, though new documentation cannot be embedded until the GPU is released.
 * **Safety Principle:** The assistant is strictly **read-only**. It will not execute state-changing infrastructure commands.
 
 ---
@@ -17,175 +16,156 @@ This document serves as the complete architectural blueprint and technical speci
 
 * **Language:** Python 3.11+
 * **Dependency Management:** `uv` (the modern, extremely fast standard for Python project management).
-* **AI Orchestration:** LangChain and LangGraph (implementing a Hierarchical ReAct pattern).
-* **LLM Backend:** Local Ollama API (`ibm/granite4:micro-h-q8_0`).
-* **Voice-to-Text:** Faster-Whisper Server (CPU-based transcription) running on the Linux Docker Host (VM 120).
-* **Telemetry Sources:** InfluxDB (Metrics) and Loki (Logs), running on the Docker host.
+* **AI Orchestration:** LangChain and LangGraph (Unified ReAct Agent pattern).
+* **LLM Backend:** Gemini 3.1 Flash Lite preview.
+* **Vector Embeddings:** Local Ollama API `nomic-embed-text`.
+* **Vector Database:** Qdrant (Knowledge retrieval).
+* **LLM Observability:** Langfuse (Tracing, metrics, and prompt management).
+* **Voice-to-Text:** Speaches (CPU-based Whisper inference) running on the Linux Docker Host.
+* **Telemetry Sources:** InfluxDB (Hardware Metrics) and Loki (Application Logs).
 * **User Interface:** Telegram Bot API (supports text, voice memos, and proactive alerts).
 
 ---
 
-## 3. Domain-Driven Agent Architecture
+## 3. System Architecture & Tooling
 
-To maximize speed, minimize token usage, and prevent ReAct hallucination loops, the architecture uses a **Hierarchical Agent Design**:
+To simplify execution and leverage the context window of Gemini 3.1 Flash Lite, the previous multi-agent architecture has been replaced with a **Unified Agent Model**. The agent dynamically accesses a centralized suite of specialized tools.
 
-| Component | Role & Responsibility | Methodology |
-| :--- | :--- | :--- |
-| **Main Agent** | **The Flexible Router.** Analyzes the user's prompt, references server topology, and selects the right sub-agent to invoke. | Dynamic `create_react_agent` with conversational memory. |
-| **Service Sub-Agents** | **Deterministic Data Gatherers.** Specialized scripts for specific services (e.g., Jellyfin, TrueNAS, Technitium). They execute hardcoded, parallel API checks (pings, logs, metrics) to guarantee accuracy. | "Dumb" Python functions that gather data upfront, ask the local LLM for a structured summary, and return text to the Main Agent. |
+### Core Tools (`tools.py` & Tool Modules)
+
+| Tool | Role & Responsibility |
+| :--- | :--- |
+| `ping(service_name)` | **Connectivity Tester.** Executes a quick ICMP/HTTP check against known internal endpoints to verify basic uptime. |
+| `telemetry(service_name, timeframe)` | **The Fused Telemetry Aggregator.** A high-efficiency script that queries Loki and InfluxDB in parallel. It calculates dynamic baselines, discards normal hardware metrics, smart-deduplicates masked logs, and outputs a highly compressed, time-aligned YAML matrix for the LLM. |
+| `qdrant.py` | **RAG Knowledge Engine.** Queries the `homelab_assistant` collection. Provides the LLM with context from stored Docker Compose files, Proxmox scripts, application runbooks, network topology, and setup information. |
+| `truenas.py` | **Storage API Client.** Direct interaction with the TrueNAS REST API to pull zpool health, dataset capacities, and alert statuses. |
 
 ---
 
 ## 4. Core Workflows
 
 ### 4.1 Proactive Anomaly Detection (Frequent Cron Job)
-Instead of scraping all APIs sequentially, the system leverages smart aggregation:
-1.  **Hardware Check:** Ping the Ollama API. (If unresponsive -> `sys.exit(0)`).
-2.  **Metric Filter:** Query InfluxDB via Flux for breached thresholds (e.g., `usage_percent > 90`).
-3.  **Log Filter:** Query Loki via LogQL for high-severity logs (`{job=~".*"} |= "level=error"`) over the last interval.
-4.  **Logic Gate:** If data is empty, exit cleanly. Do not invoke the LLM.
-5.  **LLM Analysis:** Pass data to the Agent. The AI summarizes the cause and sends a **Telegram Alert** using the `send_telegram_alert` push function.
+1.  **Telemetry Aggregation:** Calls the `telemetry` tool (e.g., `timeframe="1h"`).
+2.  **Logic Gate:** The tool filters out all baseline/normal behavior. If the resulting YAML is empty (no spikes, no ERROR/WARN logs), the script exits cleanly. Do not invoke the LLM.
+3.  **LLM Analysis:** If anomalies exist, pass the YAML payload to Gemini. The AI references `qdrant.py` for context on the failing service.
+4.  **Notification:** The AI summarizes the cause and sends a **Telegram Alert** using a push function.
 
 ### 4.2 Interactive Querying (Telegram Bot Daemon)
 1.  User sends a text or voice message to the Telegram bot.
-2.  *(If Voice)*: Audio is routed to the local Faster-Whisper container for transcription.
+2.  *(If Voice)*: Audio is routed to the local Speaches container for transcription.
 3.  Message enters the LangGraph `State`.
-4.  **Main Agent** analyzes the request and triggers the appropriate deterministic sub-agent tool (e.g., `check_jellyfin()`).
-5.  The sub-agent executes all necessary API calls automatically, synthesizes a localized status report, and passes it back to the Main Agent.
-6.  Main Agent formats the final conversational reply in the Telegram chat.
-
-### 4.3 The Daily "CIO Digest" (Morning Cron Job)
-1.  Runs daily in the morning to execute 24-hour telemetry queries.
-2.  Passes data to the Agent for a "Director level" 3-bullet-point summary.
-3.  Pushes the formatted Markdown report to Telegram.
+4.  **Agent Analysis:** Gemini analyzes the request, queries `qdrant.py` for environment specifics, and triggers `telemetry`, `ping`, or `truenas.py` to gather live data.
+5.  **Synthesis:** The Agent synthesizes the retrieved telemetry with its RAG knowledge to formulate a solution or status report.
+6.  **Response:** The Agent formats the final conversational reply in the Telegram chat, while execution traces are logged to Langfuse.
 
 ---
 
-## 5. Python Project Structure
+## 5. Fused Telemetry Aggregator Specification
+
+The `telemetry(service_name, timeframe)` tool strictly enforces LLM token efficiency. 
+
+* **Time Bucketing:** Divides timeframes into fixed intervals (`1h` -> 5m buckets, `24h` -> 2h buckets, `7d` -> 12h buckets).
+* **Hardware Matrix (InfluxDB):** Calculates a `Global_Baseline` across the timeframe. Hardware metrics (CPU, RAM, Disk IO) are only included in a bucket if they breach dynamically calculated thresholds (e.g., > 30% higher than baseline).
+* **Log Scrubbing (Loki):** Fetches only ERROR, WARN, FATAL (and specific state-change INFO logs). Masks highly dynamic variables (IPs, timestamps, ports) via regex and groups identical logs by count.
+* **Output Format:** Strict, time-aligned YAML schema. If a bucket is entirely normal, it is omitted and added to an `Ignored_Buckets` count.
+
+**Target Output YAML Schema:**
+```yaml
+Target_Service: string
+Timeframe: string (e.g., "24h (2h intervals)")
+
+Global_Baseline:
+  CPU_avg: string
+  RAM_avg: string
+  Disk_IO_Wait_avg: string
+
+Timeline:
+  - bucket: string (e.g., "14:00 to 16:00")
+    infrastructure_anomalies: # Omit entirely if no dynamic hardware spikes exist in this bucket
+      CPU_max: string
+      Disk_IO_Wait_max: string
+    log_events: # Omit entirely if no logs exist in this bucket
+      - time: string (HH:MM:SS)
+        level: string
+        message: string (Masked)
+        occurrences: int
+
+Ignored_Buckets: "X intervals omitted. System operated within hardware baselines with zero ERROR/WARN logs."
+```
+
+---
+
+## 6. Docker Infrastructure Context
+
+The core services supporting the assistant run via Docker Compose on the host. 
+
+```yaml
+services:
+  # Voice to Text (CPU Optimized)
+  whisper:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    container_name: whisper-api
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      - /home/nick/docker/whisper/models:/home/ubuntu/.cache/huggingface/hub
+
+  # LLM Observability & Tracing
+  langfuse:
+    image: ghcr.io/langfuse/langfuse:2
+    container_name: langfuse
+    restart: unless-stopped
+    ports:
+      - "${PORT}:3000"
+    environment:
+      - TZ=Europe/Athens
+      - NODE_ENV=production
+      - NEXTAUTH_URL=[http://192.168.1.120](http://192.168.1.120):${PORT}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - SALT=${SALT}
+      - TELEMETRY_ENABLED=${TELEMETRY_ENABLED}
+      - DATABASE_URL=${DATABASE_URL}
+
+  # RAG Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333" # REST API
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+    volumes:
+      - /home/nick/docker/qdrant:/qdrant/storage
+```
+
+---
+
+## 7. Python Project Structure
 
 ```text
 homelab_assistant/
 ├── pyproject.toml              # Dependency management strictly via `uv`
 ├── .env                        # API Keys, Tokens, IPs
-├── data/
-│   └── Proxmox.md              # RAG Source Document for baseline memory
 ├── scripts/
 │   ├── check_anomalies.py      # Frequent anomaly cron job (Entry Point 1)
-│   └── daily_digest.py         # Morning CIO digest cron job (Entry Point 2)
+│   ├── daily_digest.py         # Morning CIO digest cron job (Entry Point 2)
+│   └── ingest_docs.py          # Script to chunk & embed runbooks into Qdrant via Ollama
 ├── src/
 │   ├── main.py                 # Telegram bot daemon (Entry Point 3)
 │   ├── config/
 │   │   └── settings.py         # Pydantic BaseSettings for env vars
-│   ├── clients/                # API Wrappers (Fixed Templates)
-│   │   ├── influxdb.py         # Flux queries for Proxmox/Telegraf buckets
-│   │   ├── grafana_loki.py     # LogQL queries
-│   │   ├── truenas.py          # TrueNAS REST API client
-│   │   └── ping.py             # HTTP connectivity tester
+│   ├── clients/                # Raw API Wrappers
+│   │   ├── influxdb.py         
+│   │   └── grafana_loki.py     
 │   ├── bot/                    
-│   │   ├── telegram_app.py     # Bot daemon and push notification logic
-│   │   └── whisper_stt.py      # Faster-Whisper API client
+│   │   └── telegram_app.py     # Bot daemon and push notification logic
 │   └── agent/                  
-│       ├── graph.py            # LangGraph Main Agent & Tool Binding
+│       ├── graph.py            # LangGraph Agent logic
 │       ├── state.py            # TypedDict definition (inc. LangGraph internals)
-│       ├── prompts.py          # Centralized System Prompts & Topology Context
-│       └── sub_agents/         # Deterministic data-gathering tools
-│           ├── jellyfin.py     
-│           ├── navidrome.py    
-│           ├── nginx.py        
-│           ├── technitium.py   
-│           ├── truenas.py      
-│           └── vaultwarden.py
-```
-
----
-
-## 6. Required Configuration & Code Snippets
-
-### 6.1 Environment Variables (`.env`)
-
-```env
-# Local AI Endpoints
-OLLAMA_BASE_URL="[http://192.168.1.220:11434](http://192.168.1.220:11434)"
-OLLAMA_MODEL="ibm/granite4:micro-h-q8_0"
-WHISPER_API_URL="[http://192.168.1.120:8000/v1/audio/transcriptions](http://192.168.1.120:8000/v1/audio/transcriptions)"
-
-# Telemetry Endpoints
-INFLUXDB_URL="[http://192.168.1.120:8086](http://192.168.1.120:8086)"
-INFLUXDB_TOKEN="your_token"
-INFLUXDB_ORG="nick"
-INFLUXDB_PROXMOX_BUCKET="proxmox"
-INFLUXDB_DOCKER_BUCKET="telegraf"
-LOKI_URL="[http://192.168.1.120:3100](http://192.168.1.120:3100)"
-
-# Infrastructure
-TRUENAS_IP="192.168.1.110"
-TRUENAS_API_KEY="your_api_key"
-
-# Telegram Bot
-TELEGRAM_BOT_TOKEN="your_bot_token"
-TELEGRAM_ALLOWED_USER_ID=123456789
-```
-
-### 6.2 LangGraph State Definition (`src/agent/state.py`)
-```python
-from typing import Annotated, Sequence
-from typing_extensions import TypedDict, NotRequired
-from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
-
-class AssistantState(TypedDict):
-    """The core state object passed between LangGraph nodes."""
-    # Appends new messages to the existing list (crucial for Telegram chat memory)
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    
-    # Used by cronjobs to pass in raw anomaly data without clogging chat history
-    context_data: NotRequired[dict]
-    
-    # --- LangGraph Internal Keys ---
-    # Required by the prebuilt ReAct agent to prevent infinite loops
-    is_last_step: NotRequired[bool]
-    remaining_steps: NotRequired[int]
-```
-
-### 6.3 The Fast-Fail Hardware Check (`scripts/check_anomalies.py`)
-```python
-import sys
-import requests
-import os
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
-def check_ollama_and_exit():
-    """Pings Ollama directly. If unresponsive, assume AI is offline (gaming mode) and exit."""
-    ollama_url = os.getenv("OLLAMA_BASE_URL", "[http://192.168.1.220:11434](http://192.168.1.220:11434)")
-    
-    try:
-        # A simple GET request to Ollama's base endpoint to check if it is alive
-        response = requests.get(ollama_url, timeout=5)
-        response.raise_for_status()
-    except requests.RequestException:
-        print("Ollama is unreachable. AI offline (likely gaming). Canceling cron job.")
-        sys.exit(0)
-
-if __name__ == "__main__":
-    check_ollama_and_exit()
-    # Proceed with InfluxDB/Loki checks...
-```
-
-### 6.4 Docker Configuration for Voice-to-Text (Add to VM 120 Stack)
-```yaml
-services:
-  whisper:
-    image: fedirz/faster-whisper-server:latest
-    container_name: whisper-api
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    environment:
-      # Use CPU-friendly model since GPU is passed through
-      - WHISPER__MODEL=small 
-    volumes:
-      - /home/nick/docker/whisper/models:/root/.cache/huggingface
+│       ├── prompts.py          # Centralized System Prompts
+│       ├── qdrant.py           # Vector DB tool (retrieves from 'homelab_assistant' collection)
+│       ├── truenas.py          # TrueNAS Tool
+│       └── tools.py            # Contains ping() and fused telemetry() aggregation logic
 ```
