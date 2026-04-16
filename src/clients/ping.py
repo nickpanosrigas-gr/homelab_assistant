@@ -13,12 +13,6 @@ class PingClient:
         - Navidrome Domain: https://navidrome.pali.autos
         - Vaultwarden Domain: https://vw.pali.autos
         - Wireguard Domain: https://wireguard.pali.autos
-        - n8n Local: http://192.168.1.120:5678
-        - Open WebUI: https://owu.pali.autos
-        - Grafana Local: http://192.168.1.120:3001
-        - Radarr Local: http://192.168.1.120:7878
-        - Sonarr Local: http://192.168.1.120:8989
-        - qBittorrent Local: http://192.168.1.120:8080
         """
         print(f"\n[DEBUG PING] AI requested ping for URL: {url}")
         
