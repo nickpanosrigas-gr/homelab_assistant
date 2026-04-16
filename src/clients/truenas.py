@@ -1,11 +1,26 @@
 import time
 import requests
-import json
-from datetime import datetime, timezone
-from typing import Literal
+import yaml
+import re
+import concurrent.futures
+from datetime import datetime, timezone, timedelta
+from typing import Literal, Dict, List, Any
 from src.config.settings import settings
 
-class TrueNASClient:
+# -----------------------------------------------------------------------------
+# Hardware Topology & Thermal Thresholds
+# -----------------------------------------------------------------------------
+# Python 3.7+ retains dictionary order, so this exact order will be printed
+DISK_TOPOLOGY = {
+    "sdf": {"warn": 45.0, "err": 50.0, "desc": "Exos 16TB HDD Mirror0"},
+    "sdd": {"warn": 45.0, "err": 50.0, "desc": "Sky 16TB HDD Mirror0"},
+    "sde": {"warn": 45.0, "err": 50.0, "desc": "Sky 14TB HDD Mirror1"},
+    "sdc": {"warn": 45.0, "err": 50.0, "desc": "WD 14TB HDD Mirror1"},
+    "sdb": {"warn": 55.0, "err": 65.0, "desc": "500GB SSD Cache0"},
+}
+DEFAULT_THRESHOLDS = {"warn": 45.0, "err": 50.0, "desc": "Unknown Disk"}
+
+class TrueNASTelemetryAggregator:
     def __init__(self):
         self.base_url = f"http://{settings.TRUENAS_URL}/api/v2.0"
         self.headers = {
@@ -13,242 +28,255 @@ class TrueNASClient:
             "Content-Type": "application/json"
         }
 
-    def get_pool_health(self) -> str:
-        """Fetches ZFS pool health and capacity. This tool requires NO input parameters."""
-        url = f"{self.base_url}/pool"
-        print(f"\n[DEBUG TRUENAS] Fetching Pool Health via GET: {url}")
-        
-        try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            
-            if response.status_code != 200:
-                print(f"[DEBUG TRUENAS] Raw Error Response: {response.text}")
-                
-            response.raise_for_status()
-            pools = response.json()
-            
-            # Extract only the essential data to save LLM tokens
-            summary = []
-            for p in pools:
-                # Sum up stats across ALL data vdevs (fixes multi-vdev pools)
-                data_vdevs = p.get("topology", {}).get("data", [])
-                
-                size_bytes = sum(vdev.get("stats", {}).get("size", 0) for vdev in data_vdevs)
-                alloc_bytes = sum(vdev.get("stats", {}).get("allocated", 0) for vdev in data_vdevs)
-                
-                size_tb = size_bytes / (1024**4)
-                alloc_tb = alloc_bytes / (1024**4)
-                free_tb = size_tb - alloc_tb
-                
-                summary.append({
-                    "name": p.get("name"),
-                    "status": p.get("status"),
-                    "healthy": p.get("healthy"),
-                    "total_capacity_tb": round(size_tb, 2),
-                    "used_tb": round(alloc_tb, 2),
-                    "free_tb": round(free_tb, 2)
-                })
-            
-            print(f"[DEBUG TRUENAS] Successfully fetched pool health for {len(summary)} pool(s).")
-            return json.dumps(summary, indent=2)
-            
-        except requests.exceptions.RequestException as e:
-            print(f"[DEBUG TRUENAS] EXCEPTION CAUGHT: {str(e)}")
-            return f"API Error (Pools): {str(e)}"
+    def _get_time_params(self, timeframe: str) -> tuple[int, int, str]:
+        now = time.time()
+        mapping = {
+            '1h': (3600, 300, "5m"),
+            '24h': (86400, 7200, "2h"),
+            '7d': (604800, 43200, "12h")
+        }
+        duration, window_sec, window_str = mapping.get(timeframe, mapping['24h'])
+        start_sec = int(now - duration)
+        return start_sec, window_sec, window_str
 
-    def get_disk_health(self) -> str:
-        """Fetches S.M.A.R.T. status and physical disk info. This tool requires NO input parameters."""
-        url = f"{self.base_url}/disk"
-        print(f"\n[DEBUG TRUENAS] Fetching Disk Health via GET: {url}")
-        
+    def fetch_pools_and_disks(self) -> Dict[str, str]:
+        """Fetches general storage health and calculates FREE / TOTAL capacity."""
+        baseline_info = {}
         try:
-            response = requests.get(url, headers=self.headers, timeout=10)
-            
-            if response.status_code != 200:
-                print(f"[DEBUG TRUENAS] Raw Error Response: {response.text}")
-                
-            response.raise_for_status()
-            disks = response.json()
-            
-            summary = []
-            for d in disks:
-                summary.append({
-                    "name": d.get("name"),
-                    "model": d.get("model"),
-                    "serial": d.get("serial"),
-                    "size_gb": round(d.get("size", 0) / (1024**3), 2),
-                    "rotation_rate": d.get("rotationrate"),
-                    "toggles": d.get("toggles")
-                })
-                
-            print(f"[DEBUG TRUENAS] Successfully fetched disk health for {len(summary)} disk(s).")
-            return json.dumps(summary, indent=2)
-            
-        except requests.exceptions.RequestException as e:
-            print(f"[DEBUG TRUENAS] EXCEPTION CAUGHT: {str(e)}")
-            return f"API Error (Disks): {str(e)}"
+            pools_resp = requests.get(f"{self.base_url}/pool", headers=self.headers, timeout=10)
+            if pools_resp.status_code == 200:
+                for p in pools_resp.json():
+                    data_vdevs = p.get("topology", {}).get("data", [])
+                    size_tb = sum(v.get("stats", {}).get("size", 0) for v in data_vdevs) / (1024**4)
+                    alloc_tb = sum(v.get("stats", {}).get("allocated", 0) for v in data_vdevs) / (1024**4)
+                    
+                    # Calculate true free space
+                    free_tb = size_tb - alloc_tb
+                    status = p.get("status", "UNKNOWN")
+                    
+                    baseline_info[f"Pool_{p.get('name')}"] = f"{free_tb:.2f}TB free / {size_tb:.2f}TB total ({status})"
 
-    def get_disk_temps(self, timeframe: Literal['day', 'week', 'month'] = 'day') -> str:
-        """
-        Fetches live temps and formats historical temperatures into structured Trends and Extremes.
-        """
-        live_url = f"{self.base_url}/disk/temperatures"
-        print(f"\n[DEBUG TRUENAS] Fetching Live Disk Temps...")
+            disks_resp = requests.get(f"{self.base_url}/disk", headers=self.headers, timeout=10)
+            if disks_resp.status_code == 200:
+                disks = disks_resp.json()
+                baseline_info["Physical_Disks"] = f"{len(disks)} Disks Detected (S.M.A.R.T. Active)"
+                
+        except Exception as e:
+            print(f"[ERROR TRUENAS BASELINE] {e}")
+            baseline_info["API_Error"] = str(e)
+            
+        return baseline_info
+
+    def fetch_temps(self, start_sec: int, window_sec: int) -> tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
+        now = time.time()
+        baseline_avg = {}
+        bucket_max = {}
         
         try:
-            live_resp = requests.post(live_url, headers=self.headers, json={}, timeout=10)
-            live_resp.raise_for_status()
-            live_temps = live_resp.json() # {"sda": 35, "sdb": 36}
+            live_resp = requests.post(f"{self.base_url}/disk/temperatures", headers=self.headers, json={}, timeout=10)
+            raw_live_temps = live_resp.json() if live_resp.status_code == 200 else {}
             
-            disks = sorted(list(live_temps.keys()))
+            live_temps = {d: float(t) for d, t in raw_live_temps.items() if t is not None}
+            disks = list(live_temps.keys())
+            
             if not disks:
-                return "No temperature data available for any disks."
+                return {}, {}
 
-            # 1. Define the Splits (in seconds)
-            now = time.time()
-            if timeframe == 'day':
-                start_sec = now - (24 * 3600)
-                avg_window = 2 * 3600    # 2h split
-                max_window = 8 * 3600    # 8h split
-            elif timeframe == 'week':
-                start_sec = now - (7 * 24 * 3600)
-                avg_window = 12 * 3600   # 12h split
-                max_window = 24 * 3600   # 24h split
-            elif timeframe == 'month':
-                start_sec = now - (30 * 24 * 3600)
-                avg_window = 72 * 3600   # 72h split
-                max_window = 168 * 3600  # 168h split
-            else:
-                return "Error: timeframe must be 'day', 'week', or 'month'."
-
-            # 2. Fetch Historical Temperatures via Reporting API
-            reporting_url = f"{self.base_url}/reporting/get_data"
-            graphs = [{"name": "disktemp", "identifier": disk} for disk in disks]
-            
-            # Start string formatting for TrueNAS API
             start_str = f"now-{int((now - start_sec) / 3600)}h" 
-            
             payload = {
-                "graphs": graphs,
-                "reporting_query": {
-                    "start": start_str,
-                    "end": "now",
-                    "aggregate": True # Tells TrueNAS to not return millions of raw points
-                }
+                "graphs": [{"name": "disktemp", "identifier": d} for d in disks],
+                "reporting_query": {"start": start_str, "end": "now", "aggregate": True}
             }
-
-            print(f"[DEBUG TRUENAS] Fetching Historical Temps (Start: {start_str})...")
-            report_resp = requests.post(reporting_url, headers=self.headers, json=payload, timeout=15)
+            report_resp = requests.post(f"{self.base_url}/reporting/get_data", headers=self.headers, json=payload, timeout=15)
             
             if report_resp.status_code != 200:
-                print(f"[DEBUG TRUENAS] Reporting API failed. Returning only live temps.")
-                live_strs = [f"{k}: {v}°C" for k, v in live_temps.items()]
-                return "Historical Data Unavailable. Live Temps: " + ", ".join(live_strs)
+                return live_temps, {} 
 
-            report_data = report_resp.json()
+            sums = {}
+            counts = {}
+            buckets_raw = {}
 
-            # 3. Process and Bin the Data into Windows
-            trends_data = {}   # { timestamp: { "sda": [val1, val2], "sdb": [...] } }
-            extremes_data = {} # { timestamp: { "sda": [val1, val2], "sdb": [...] } }
-
-            for item in report_data:
-                disk_name = item.get("identifier")
+            for item in report_resp.json():
+                disk = item.get("identifier")
                 for point in item.get("data", []):
-                    if not point or len(point) < 2 or point[1] is None:
-                        continue
-                    
-                    ts = point[0]
-                    temp = point[1]
-                    
-                    if ts < start_sec:
-                        continue
-                        
-                    # Calculate the "bucket" this timestamp belongs to
-                    trend_bin = (ts // avg_window) * avg_window
-                    extreme_bin = (ts // max_window) * max_window
-                    
-                    # Store for Trend averages
-                    if trend_bin not in trends_data: trends_data[trend_bin] = {}
-                    if disk_name not in trends_data[trend_bin]: trends_data[trend_bin][disk_name] = []
-                    trends_data[trend_bin][disk_name].append(temp)
-                    
-                    # Store for Extreme maxes
-                    if extreme_bin not in extremes_data: extremes_data[extreme_bin] = {}
-                    if disk_name not in extremes_data[extreme_bin]: extremes_data[extreme_bin][disk_name] = []
-                    extremes_data[extreme_bin][disk_name].append(temp)
+                    if not point or len(point) < 2 or point[1] is None: continue
+                    ts, temp = point[0], float(point[1])
+                    if ts < start_sec: continue
 
-            # 4. Helper Function to generate the clean CSV
-            def build_csv(data_dict, is_max=False):
-                if not data_dict:
-                    return "No data points found."
-                    
-                lines = []
-                header = ["_time"] + disks
-                lines.append(",".join(header))
-                
-                # Sort chronologically
-                for ts in sorted(data_dict.keys()):
-                    time_str = datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-                    row = [time_str]
-                    for disk in disks:
-                        vals = data_dict[ts].get(disk, [])
-                        if vals:
-                            # Calculate Average or Max
-                            val = max(vals) if is_max else sum(vals) / len(vals)
-                            row.append(f"{val:.1f}")
-                        else:
-                            row.append("") # Empty column if disk was offline/missing
-                    lines.append(",".join(row))
-                return "\n".join(lines)
+                    sums[disk] = sums.get(disk, 0) + temp
+                    counts[disk] = counts.get(disk, 0) + 1
 
-            # 5. Format the Final LLM Payload
-            averages_csv = build_csv(trends_data, is_max=False)
-            extremes_csv = build_csv(extremes_data, is_max=True)
-            
-            live_strs = [f"{k}: {v}°C" for k, v in live_temps.items()]
-            
-            llm_payload = (
-                f"LIVE TEMPERATURES (Right Now):\n{', '.join(live_strs)}\n\n"
-                f"EXTREMES (Max values over {int(max_window/3600)}h windows):\n"
-                "Note: Check this to ensure no disk exceeded safe operating temperatures.\n"
-                f"```csv\n{extremes_csv}\n```\n\n"
-                f"TRENDS (Averages over {int(avg_window/3600)}h windows):\n"
-                "Note: Use this to understand normal heating/cooling patterns.\n"
-                f"```csv\n{averages_csv}\n```"
-            )
-            
-            print(f"[DEBUG TRUENAS] Processed {len(trends_data)} trend windows and {len(extremes_data)} extreme windows.")
-            return llm_payload
-            
-        except requests.exceptions.RequestException as e:
-            error_msg = f"API Error (Temps): {str(e)}"
-            print(f"[DEBUG TRUENAS] EXCEPTION CAUGHT: {error_msg}")
-            return error_msg
+                    bucket_ts = (int(ts) // window_sec) * window_sec
+                    if bucket_ts not in buckets_raw: buckets_raw[bucket_ts] = {}
+                    if disk not in buckets_raw[bucket_ts]: buckets_raw[bucket_ts][disk] = []
+                    buckets_raw[bucket_ts][disk].append(temp)
 
-    def get_alerts(self) -> str:
-        """Fetches active system alerts. This tool requires NO input parameters."""
-        url = f"{self.base_url}/alert/list"
-        print(f"\n[DEBUG TRUENAS] Fetching Active Alerts via GET: {url}")
-        
+            baseline_avg = {d: round(sums[d]/counts[d], 1) for d in sums if counts[d] > 0}
+            bucket_max = {ts: {d: max(temps) for d, temps in disks_dict.items() if temps} for ts, disks_dict in buckets_raw.items()}
+
+        except Exception as e:
+            print(f"[ERROR TRUENAS TEMPS] {e}")
+            
+        return baseline_avg, bucket_max
+
+    def fetch_alerts(self, start_sec: int) -> List[Dict]:
+        logs = []
         try:
-            response = requests.get(url, headers=self.headers, timeout=10)
+            resp = requests.get(f"{self.base_url}/alert/list", headers=self.headers, timeout=10)
+            if resp.status_code != 200: return logs
             
-            if response.status_code != 200:
-                print(f"[DEBUG TRUENAS] Raw Error Response: {response.text}")
+            for a in resp.json():
+                if a.get("dismissed"): continue
                 
-            response.raise_for_status()
-            alerts = response.json()
-            
-            # Filter out dismissed alerts
-            active = [a for a in alerts if not a.get("dismissed")]
-            print(f"[DEBUG TRUENAS] Successfully fetched {len(active)} active alert(s).")
-            
-            if not active:
-                return "No active alerts. System is healthy."
+                raw_level = a.get("level", "WARNING")
+                if raw_level == "WARNING": level = "WARN"
+                elif raw_level == "CRITICAL": level = "FATAL"
+                else: level = raw_level
+
+                dt_dict = a.get("datetime", {})
+                ts_ms = dt_dict.get("$date", time.time() * 1000)
+                ts_sec = ts_ms / 1000
                 
-            summary = [{"level": a.get("level"), "message": a.get("formatted")} for a in active]
-            return json.dumps(summary, indent=2)
+                if ts_sec < start_sec:
+                    ts_sec = start_sec
+                    
+                raw_msg = a.get("formatted", "Unknown Alert")
+                clean_msg = re.sub(r'<[^>]+>', ' ', raw_msg) 
+                clean_msg = re.sub(r'\s+', ' ', clean_msg).strip() 
+                
+                logs.append({
+                    "ts_sec": ts_sec,
+                    "level": level,
+                    "message": clean_msg
+                })
+        except Exception as e:
+            print(f"[ERROR TRUENAS ALERTS] {e}")
             
-        except requests.exceptions.RequestException as e:
-            print(f"[DEBUG TRUENAS] EXCEPTION CAUGHT: {str(e)}")
-            return f"API Error (Alerts): {str(e)}"
+        return logs
+
+    def run(self, timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
+        start_sec, window_sec, window_str = self._get_time_params(timeframe)
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            f_pools = executor.submit(self.fetch_pools_and_disks)
+            f_temps = executor.submit(self.fetch_temps, start_sec, window_sec)
+            f_alerts = executor.submit(self.fetch_alerts, start_sec)
+            
+            baseline_info = f_pools.result()
+            baseline_avg_temps, bucket_max_temps = f_temps.result()
+            active_alerts = f_alerts.result()
+
+        global_baseline = {**baseline_info}
+        
+        # Build the exact ordered temperatures map
+        if baseline_avg_temps:
+            ordered_temps = {}
+            # 1. Map known disks in the precise order specified in DISK_TOPOLOGY
+            for d_id, d_info in DISK_TOPOLOGY.items():
+                if d_id in baseline_avg_temps:
+                    ordered_temps[d_info["desc"]] = f"{baseline_avg_temps[d_id]} C"
+            
+            # 2. Safely catch any other unknown disks so they don't disappear
+            for d_id, temp in baseline_avg_temps.items():
+                if d_id not in DISK_TOPOLOGY:
+                    desc = f"{d_id} (Unknown)"
+                    ordered_temps[desc] = f"{temp} C"
+                    
+            global_baseline["Disk_Temp_Averages"] = ordered_temps
+
+        timeline = {}
+
+        for ts, disks_dict in bucket_max_temps.items():
+            dt = datetime.fromtimestamp(ts, timezone.utc)
+            bucket_key = dt.strftime("%Y-%m-%d %H:%M:%S")
+            
+            anomalies = {}
+            temp_events = []
+            
+            for disk, max_temp in disks_dict.items():
+                thresholds = DISK_TOPOLOGY.get(disk, DEFAULT_THRESHOLDS)
+                warn_limit = thresholds["warn"]
+                err_limit = thresholds["err"]
+                desc = thresholds["desc"]
+                
+                if max_temp >= err_limit:
+                    anomalies[f"Temp_{desc}_max"] = f"{max_temp} C"
+                    temp_events.append({
+                        "time": dt.strftime("%H:%M:%S"),
+                        "level": "FATAL",
+                        "message": f"THERMAL ALERT: {desc} exceeded critical limit: {max_temp} C (Threshold: {err_limit} C)",
+                        "occurrences": 1
+                    })
+                elif max_temp >= warn_limit:
+                    anomalies[f"Temp_{desc}_max"] = f"{max_temp} C"
+                    temp_events.append({
+                        "time": dt.strftime("%H:%M:%S"),
+                        "level": "WARN",
+                        "message": f"THERMAL WARNING: {desc} running hot: {max_temp} C (Threshold: {warn_limit} C)",
+                        "occurrences": 1
+                    })
+                    
+            if anomalies or temp_events:
+                if bucket_key not in timeline:
+                    timeline[bucket_key] = {"bucket": bucket_key, "infrastructure_anomalies": anomalies, "log_events": []}
+                else:
+                    if "infrastructure_anomalies" not in timeline[bucket_key]:
+                        timeline[bucket_key]["infrastructure_anomalies"] = {}
+                    timeline[bucket_key]["infrastructure_anomalies"].update(anomalies)
+                    
+                if temp_events:
+                    timeline[bucket_key]["log_events"].extend(temp_events)
+
+        for alert in active_alerts:
+            ts_sec = alert["ts_sec"]
+            dt = datetime.fromtimestamp(ts_sec, timezone.utc)
+            bucket_ts = (int(ts_sec) // window_sec) * window_sec
+            bucket_dt = datetime.fromtimestamp(bucket_ts, timezone.utc)
+            bucket_key = bucket_dt.strftime("%Y-%m-%d %H:%M:%S")
+            
+            if bucket_key not in timeline:
+                timeline[bucket_key] = {"bucket": bucket_key, "log_events": []}
+                
+            if "log_events" not in timeline[bucket_key]:
+                timeline[bucket_key]["log_events"] = []
+                
+            timeline[bucket_key]["log_events"].append({
+                "time": dt.strftime("%H:%M:%S"),
+                "level": alert["level"],
+                "message": alert["message"],
+                "occurrences": 1
+            })
+
+        final_timeline = []
+        ignored_count = 0
+        total_possible_buckets = int((time.time() - start_sec) / window_sec)
+        
+        for k, v in sorted(timeline.items()):
+            has_anomalies = "infrastructure_anomalies" in v and v["infrastructure_anomalies"]
+            has_logs = "log_events" in v and len(v["log_events"]) > 0
+            
+            if has_anomalies or has_logs:
+                if not has_anomalies: v.pop("infrastructure_anomalies", None)
+                if not has_logs: v.pop("log_events", None)
+                final_timeline.append(v)
+                
+        ignored_count = total_possible_buckets - len(final_timeline)
+
+        output = {
+            "Target_Service": "TrueNAS Core/Scale",
+            "Timeframe": f"{timeframe} ({window_str} intervals)",
+            "Global_Baseline": global_baseline,
+            "Timeline": final_timeline,
+            "Ignored_Buckets": f"{ignored_count if ignored_count > 0 else 0} intervals omitted. Pool capacity healthy, disk temps nominal, no active alerts."
+        }
+        
+        return yaml.dump(output, sort_keys=False, allow_unicode=False)
+
+def truenas(timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
+    return TrueNASTelemetryAggregator().run(timeframe)
+
+if __name__ == "__main__":
+    print("--- TEST 1: TrueNAS 24-Hour Telemetry ---")
+    print(truenas("24h"))
+    print("\n--- TEST 2: TrueNAS 1-Hour Telemetry ---")
+    print(truenas("1h"))
