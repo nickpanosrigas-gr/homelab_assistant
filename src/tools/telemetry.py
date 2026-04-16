@@ -218,4 +218,4 @@ def telemetry(service_name: str, timeframe: Literal['1h', '24h', '7d'] = '24h') 
     return FusedTelemetryAggregator().run(service_name, timeframe)
 
 if __name__ == "__main__":
-    print(telemetry("jellyfin", "7d"))
+    print(telemetry("navidrome", "7d"))
