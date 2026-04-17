@@ -41,6 +41,7 @@ class TrueNASTelemetryAggregator:
 
     def fetch_pools_and_disks(self) -> Dict[str, str]:
         """Fetches general storage health and calculates FREE / TOTAL capacity."""
+        print(f"[DEBUG TRUENAS] Fetching storage pool capacities and disk topologies...")
         baseline_info = {}
         try:
             pools_resp = requests.get(f"{self.base_url}/pool", headers=self.headers, timeout=10)
@@ -61,6 +62,7 @@ class TrueNASTelemetryAggregator:
                 disks = disks_resp.json()
                 baseline_info["Physical_Disks"] = f"{len(disks)} Disks Detected (S.M.A.R.T. Active)"
                 
+            print(f"[DEBUG TRUENAS] Successfully retrieved pool/disk baseline data.")
         except Exception as e:
             print(f"[ERROR TRUENAS BASELINE] {e}")
             baseline_info["API_Error"] = str(e)
@@ -68,6 +70,7 @@ class TrueNASTelemetryAggregator:
         return baseline_info
 
     def fetch_temps(self, start_sec: int, window_sec: int) -> tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
+        print(f"[DEBUG TRUENAS] Fetching TrueNAS disk temperatures & generating aggregates...")
         now = time.time()
         baseline_avg = {}
         bucket_max = {}
@@ -114,12 +117,14 @@ class TrueNASTelemetryAggregator:
             baseline_avg = {d: round(sums[d]/counts[d], 1) for d in sums if counts[d] > 0}
             bucket_max = {ts: {d: max(temps) for d, temps in disks_dict.items() if temps} for ts, disks_dict in buckets_raw.items()}
 
+            print(f"[DEBUG TRUENAS] Analyzed temperatures for {len(disks)} disks across reporting buckets.")
         except Exception as e:
             print(f"[ERROR TRUENAS TEMPS] {e}")
             
         return baseline_avg, bucket_max
 
     def fetch_alerts(self, start_sec: int) -> List[Dict]:
+        print(f"[DEBUG TRUENAS] Fetching active TrueNAS system alerts...")
         logs = []
         try:
             resp = requests.get(f"{self.base_url}/alert/list", headers=self.headers, timeout=10)
@@ -149,12 +154,14 @@ class TrueNASTelemetryAggregator:
                     "level": level,
                     "message": clean_msg
                 })
+            print(f"[DEBUG TRUENAS] Parsed {len(logs)} active alerts from system.")
         except Exception as e:
             print(f"[ERROR TRUENAS ALERTS] {e}")
             
         return logs
 
     def run(self, timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
+        print(f"\n[DEBUG TRUENAS] AI requested TrueNAS telemetry (Timeframe: {timeframe})")
         start_sec, window_sec, window_str = self._get_time_params(timeframe)
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -165,6 +172,8 @@ class TrueNASTelemetryAggregator:
             baseline_info = f_pools.result()
             baseline_avg_temps, bucket_max_temps = f_temps.result()
             active_alerts = f_alerts.result()
+
+        print(f"[DEBUG TRUENAS] All data streams retrieved. Synthesizing timeline and thermal anomalies...")
 
         global_baseline = {**baseline_info}
         
@@ -261,6 +270,7 @@ class TrueNASTelemetryAggregator:
                 final_timeline.append(v)
                 
         ignored_count = total_possible_buckets - len(final_timeline)
+        print(f"[DEBUG TRUENAS] Analysis complete. Returning payload with {len(final_timeline)} recorded events.")
 
         output = {
             "Target_Service": "TrueNAS Core/Scale",

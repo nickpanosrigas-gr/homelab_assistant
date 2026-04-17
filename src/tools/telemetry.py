@@ -45,6 +45,8 @@ class FusedTelemetryAggregator:
         """Dynamically routes query to Docker or Proxmox buckets and grabs Avg/Max baselines."""
         is_proxmox = service_name.lower() in PROXMOX_LXC_SERVICES
         
+        print(f"[DEBUG TELEMETRY] Executing InfluxDB Flux query for {service_name} (is_proxmox={is_proxmox})")
+
         if is_proxmox:
             flux_query = f"""
             data = from(bucket: "{settings.INFLUXDB_PROXMOX_BUCKET}") 
@@ -114,6 +116,8 @@ class FusedTelemetryAggregator:
                         metrics["buckets"][ts][standard_field] = val
                 except (KeyError, ValueError, IndexError):
                     continue
+            
+            print(f"[DEBUG TELEMETRY] Successfully parsed InfluxDB metrics for {service_name}")
             return metrics
         except Exception as e:
             print(f"[ERROR INFLUXDB] {e}")
@@ -123,10 +127,11 @@ class FusedTelemetryAggregator:
         """Builds custom LogQL queries based on the service architecture."""
         lower_service = service_name.lower()
         
-        if lower_service == 'jellyfin':
-            query = f'{{service_name=~"(?i)jellyfin|syslog"}} |~ "(?i)jellyfin|transcode" |~ "(?i)error|warn|fatal"'
-        elif lower_service in PROXMOX_LXC_SERVICES:
-            query = f'{{service_name=~"(?i){lower_service}|syslog"}} |~ "(?i){lower_service}" |~ "(?i)error|warn|fatal"'
+        print(f"[DEBUG TELEMETRY] Executing Loki LogQL query for {service_name}")
+        
+        # This one block now perfectly handles Jellyfin, Technitium, and Ollama
+        if lower_service in PROXMOX_LXC_SERVICES:
+            query = f'{{service_name=~"(?i){lower_service}-app|{lower_service}-sys"}} |~ "(?i){lower_service}" |~ "(?i)error|warn|fatal"'
         else:
             query = f'{{service_name=~"(?i){lower_service}"}} |~ "(?i)error|warn|fatal"'
             
@@ -139,20 +144,28 @@ class FusedTelemetryAggregator:
             
             logs = []
             for stream in results:
+                # This loop is what grabs the logs from BOTH the -app and -sys streams
                 for val in stream.get("values", []):
                     logs.append((int(val[0]) / 1_000_000_000, val[1].strip()))
+            
+            print(f"[DEBUG TELEMETRY] Successfully retrieved {len(logs)} log entries from Loki for {service_name}")
+            
+            # This sorts the fused logs chronologically before sending them to the AI
             return sorted(logs, key=lambda x: x[0])
         except Exception as e:
             print(f"[ERROR LOKI] {e}")
             return []
 
     def run(self, service_name: str, timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
+        print(f"\n[DEBUG TELEMETRY] AI requested telemetry for service: '{service_name}' (Timeframe: {timeframe})")
         start_flux, window_flux, start_ns, end_ns = self._get_time_params(timeframe)
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             future_influx = executor.submit(self.fetch_influx_metrics, service_name, start_flux, window_flux)
             future_loki = executor.submit(self.fetch_loki_logs, service_name, start_ns, end_ns)
             influx_data, raw_logs = future_influx.result(), future_loki.result()
+
+        print(f"[DEBUG TELEMETRY] Fusing and processing infrastructure metrics and log anomalies...")
 
         # Extract both Averages and Maximums
         baseline_cpu_avg = influx_data["baseline_avg"].get("cpu", 0.0)
@@ -200,6 +213,8 @@ class FusedTelemetryAggregator:
 
         final_timeline = [v for k, v in sorted(timeline.items()) if v.get("infrastructure_anomalies") or v.get("log_events")]
         
+        print(f"[DEBUG TELEMETRY] Telemetry compilation complete for {service_name}. Formatted {len(final_timeline)} buckets with events.")
+        
         output = {
             "Target_Service": service_name,
             "Timeframe": f"{timeframe} ({window_flux} intervals)",
@@ -218,4 +233,4 @@ def telemetry(service_name: str, timeframe: Literal['1h', '24h', '7d'] = '24h') 
     return FusedTelemetryAggregator().run(service_name, timeframe)
 
 if __name__ == "__main__":
-    print(telemetry("navidrome", "7d"))
+    print(telemetry("jellyfin","24h"))
