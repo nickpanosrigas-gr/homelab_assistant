@@ -29,7 +29,7 @@ def query_knowledge(
         ip_address: Filter by specific IP (e.g., "192.168.1.120").
         content_type: Filter by format (e.g., "config_file", "docker_compose").
     """
-    logger.info(f"AI requested knowledge base query: '{query}'")
+    print(f"\n[DEBUG QDRANT] AI requested knowledge base query: '{query}'")
     
     try:
         # 1. Initialize Embeddings (Must match the ingestion model)
@@ -67,7 +67,11 @@ def query_knowledge(
         # Compile the Qdrant filter object (if any filters were provided)
         qdrant_filter = models.Filter(must=must_conditions) if must_conditions else None
 
+        if must_conditions:
+            print(f"[DEBUG QDRANT] Applying {len(must_conditions)} exact-match filters.")
+
         # 4. Execute the Search (Fetch top 3 most relevant chunks)
+        print(f"[DEBUG QDRANT] Executing vector search for top 3 results...")
         results = vector_store.similarity_search(
             query=query,
             k=3,
@@ -75,20 +79,29 @@ def query_knowledge(
         )
 
         if not results:
+            print(f"[DEBUG QDRANT] No results found.")
             return f"No documentation found in the knowledge base matching query: '{query}' and provided filters."
+
+        print(f"[DEBUG QDRANT] Retrieved {len(results)} chunks. Formatting output...")
 
         # 5. Format the output efficiently for the LLM Context Window
         output = ["--- RETRIEVED KNOWLEDGE BASE CONTEXT ---"]
         for i, doc in enumerate(results):
+            # Safely extract the Qdrant point ID from the Document object
+            point_id = getattr(doc, 'id', None)
+            if point_id is None:
+                point_id = doc.metadata.get("_id", doc.metadata.get("id", "Unknown ID"))
+                
             source = doc.metadata.get("source_file", "Unknown Source")
             section = doc.metadata.get("Section") or doc.metadata.get("Sub-Section") or "General"
             
-            output.append(f"\n[RESULT {i+1} | Source: {source} | Section: {section}]")
+            output.append(f"\n[RESULT {i+1} | ID: {point_id} | Source: {source} | Section: {section}]")
             output.append(doc.page_content)
             output.append("-" * 40)
 
         return "\n".join(output)
 
     except Exception as e:
+        print(f"[ERROR QDRANT] Vector DB Error: {str(e)}")
         logger.error(f"Vector DB Error: {str(e)}")
         return f"Error querying knowledge base: {str(e)}"
