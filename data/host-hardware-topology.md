@@ -22,6 +22,3 @@ hardware_dependencies:
     * 1x 500GB SSD (Cache)
     * 2x 16TB HDDs (Mirror VDEV)
     * 2x 14TB HDDs (Mirror VDEV)
-
-### 2. Network & Services Topology
-The Proxmox host operates on **192.168.1.100**.
