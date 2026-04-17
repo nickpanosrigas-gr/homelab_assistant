@@ -2,9 +2,9 @@ import os
 import glob
 import frontmatter
 import logging
+import hashlib
 from typing import List
 
-from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from langchain_qdrant import QdrantVectorStore
@@ -17,19 +17,11 @@ from src.config.settings import settings
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Collection name as specified in your architecture docs
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 def process_markdown_files() -> List[Document]:
-    """Reads .md files, extracts YAML frontmatter, and chunks by Markdown headers."""
+    """Reads .md files and extracts YAML frontmatter. Treats each file as a single coherent document."""
     documents = []
-    
-    # Target headers for cohesive chunking
-    headers_to_split_on = [
-        ("##", "Section"),
-        ("###", "Sub-Section")
-    ]
-    markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
     
     # Find all markdown files in the data directory
     md_files = glob.glob(os.path.join(DATA_DIR, "*.md"))
@@ -46,23 +38,27 @@ def process_markdown_files() -> List[Document]:
             with open(file_path, "r", encoding="utf-8") as f:
                 post = frontmatter.load(f)
                 
-            base_metadata = post.metadata
+            metadata = post.metadata
             content = post.content
             
-            # Add the source filename for reference
-            base_metadata["source_file"] = os.path.basename(file_path)
+            filename = os.path.basename(file_path)
             
-            # 2. Split the markdown content by headers
-            splits = markdown_splitter.split_text(content)
+            # OPTIMIZATION: Generate a deterministic ID based on the filename.
+            # This ensures that updating a file overwrites its old chunk in Qdrant 
+            # instead of creating a duplicate.
+            doc_id = hashlib.md5(filename.encode()).hexdigest()
             
-            # 3. Merge Frontmatter Metadata with Header Metadata
-            for split in splits:
-                # Merge the dictionaries. Header metadata (like "Section") joins the base frontmatter.
-                merged_metadata = {**base_metadata, **split.metadata}
-                
-                # Create the final Langchain Document
-                doc = Document(page_content=split.page_content, metadata=merged_metadata)
-                documents.append(doc)
+            # Append reference metadata
+            metadata["source_file"] = filename
+            metadata["_id"] = doc_id 
+            
+            # 2. Create the final Langchain Document (No splitting)
+            doc = Document(
+                page_content=content, 
+                metadata=metadata,
+                id=doc_id # Explicitly pass the ID to LangChain
+            )
+            documents.append(doc)
                 
         except Exception as e:
             logger.error(f"Failed to process {file_path}: {str(e)}")
@@ -78,7 +74,7 @@ def main():
         logger.error("Exiting: No documents to ingest.")
         return
         
-    logger.info(f"Generated {len(docs)} chunks from Markdown files.")
+    logger.info(f"Generated {len(docs)} documents for ingestion.")
 
     # 2. Initialize Ollama Embeddings
     logger.info(f"Initializing Embeddings via Ollama ({settings.OLLAMA_EMBED_MODEL})...")
@@ -103,16 +99,19 @@ def main():
         )
 
     # 4. Ingest into Vector Store
-    logger.info(f"Pushing {len(docs)} document chunks to Qdrant...")
+    logger.info(f"Pushing {len(docs)} documents to Qdrant...")
     
-    # QdrantVectorStore.from_documents handles the batch uploading seamlessly
+    # OPTIMIZATION: Extract the deterministic IDs to pass to from_documents
+    doc_ids = [doc.id for doc in docs]
+    
     QdrantVectorStore.from_documents(
         docs,
         embeddings,
+        ids=doc_ids, # Pass the IDs to Qdrant
         url=settings.QDRANT_URL,
         api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None,
         collection_name=settings.QDRANT_COLLECTION_NAME,
-        force_recreate=True # Set to False in production if you only want to append
+        force_recreate=False # Set to False so we update (upsert) instead of wipe
     )
     
     logger.info("✅ Ingestion complete! Knowledge base is updated and ready for retrieval.")

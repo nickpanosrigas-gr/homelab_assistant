@@ -38,6 +38,7 @@ def truenas(timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
 @tool
 def qdrant(
     query: str,
+    search_size: Literal["normal", "large"] = "normal",
     domain: Optional[str] = None,
     resource_id: Optional[int] = None,
     service_name: Optional[str] = None,
@@ -48,13 +49,16 @@ def qdrant(
     RAG Knowledge Engine. Queries the Qdrant vector database for local knowledge base context.
     Use this to find Docker Compose files, Proxmox scripts, application runbooks, network 
     topology, and general homelab setup information.
+    
     Use the optional parameters to strictly filter the results based on known attributes.
+    Set search_size to 'large' (8 results) if you need extensive context, otherwise leave as 'normal' (3 results).
     """
     return query_knowledge(
-        query=query, 
-        domain=domain, 
-        resource_id=resource_id, 
-        service_name=service_name, 
-        ip_address=ip_address, 
+        query=query,
+        search_size=search_size,
+        domain=domain,
+        resource_id=resource_id,
+        service_name=service_name,
+        ip_address=ip_address,
         content_type=content_type
     )
