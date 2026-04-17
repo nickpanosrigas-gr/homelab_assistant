@@ -12,3 +12,6 @@ __pycache__/
 # IDEs
 .vscode/
 .idea/
+
+# Ignore vector DB knowledge base files but keep the directory
+data/
