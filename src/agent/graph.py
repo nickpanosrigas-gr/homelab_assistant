@@ -3,7 +3,7 @@ from langgraph.prebuilt import create_react_agent
 
 from src.config.settings import settings
 from src.agent.state import AssistantState
-from src.agent.tools import ping, telemetry, truenas#, query_knowledge
+from src.agent.tools import ping, telemetry, truenas, qdrant
 
 MAIN_AGENT_SYSTEM_PROMPT = """You are the Home Lab AIOps Assistant, a highly capable, read-only AI agent managing a Proxmox and Docker-based home lab environment.
 
@@ -29,8 +29,8 @@ llm = ChatGoogleGenerativeAI(
 tools = [
     ping,
     telemetry,
-    truenas#,
-    #query_knowledge
+    truenas,
+    qdrant
 ]
 
 # create_react_agent automatically compiles the StateGraph, 

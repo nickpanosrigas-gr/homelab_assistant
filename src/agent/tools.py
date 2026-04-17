@@ -1,13 +1,11 @@
-from typing import Literal
+from typing import Literal, Optional
 from langchain_core.tools import tool
 
 # Import your raw deterministic tools
 from src.tools.ping import PingClient
 from src.tools.telemetry import telemetry as fetch_telemetry
 from src.tools.truenas import truenas as fetch_truenas
-
-# Assuming you have a query function in your qdrant.py script
-#from src.agent.qdrant import query_qdrant 
+from src.tools.qdrant import query_knowledge
 
 # Instantiate clients that require it
 ping_client = PingClient()
@@ -36,13 +34,27 @@ def truenas(timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
     and active alert statuses.
     """
     return fetch_truenas(timeframe)
-'''
+
 @tool
-def query_knowledge(query: str) -> str:
+def qdrant(
+    query: str,
+    domain: Optional[str] = None,
+    resource_id: Optional[int] = None,
+    service_name: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    content_type: Optional[str] = None
+) -> str:
     """
     RAG Knowledge Engine. Queries the Qdrant vector database for local knowledge base context.
     Use this to find Docker Compose files, Proxmox scripts, application runbooks, network 
     topology, and general homelab setup information.
+    Use the optional parameters to strictly filter the results based on known attributes.
     """
-    return query_qdrant(query)
-'''
+    return query_knowledge(
+        query=query, 
+        domain=domain, 
+        resource_id=resource_id, 
+        service_name=service_name, 
+        ip_address=ip_address, 
+        content_type=content_type
+    )

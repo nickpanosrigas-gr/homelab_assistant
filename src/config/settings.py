@@ -4,6 +4,7 @@ class Settings(BaseSettings):
     # Local AI Endpoints
     OLLAMA_BASE_URL: str
     OLLAMA_MODEL: str
+    OLLAMA_EMBED_MODEL: str
     OLLAMA_NUM_CTX: int
     OLLAMA_TEMPERATURE: float
     
@@ -14,6 +15,11 @@ class Settings(BaseSettings):
     # Gemini
     GOOGLE_API_KEY: str
     GEMINI_MODEL: str
+    
+    # Qdrant
+    QDRANT_URL: str
+    QDRANT_API_KEY: str
+    QDRANT_COLLECTION_NAME: str
     
     # Telemetry Endpoints
     INFLUXDB_URL: str

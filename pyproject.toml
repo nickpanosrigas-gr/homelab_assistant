@@ -15,7 +15,11 @@ dependencies = [
     "pytelegrambotapi>=4.32.0",
     "langchain-ollama>=1.0.1",
     "langfuse>=2.0.0,<3.0.0",
-    "langchain-google-genai>=4.2.1"
+    "langchain-google-genai>=4.2.1",
+    "qdrant-client>=1.7.0",
+    "langchain-qdrant>=0.1.1",
+    "python-frontmatter>=1.1.0",
+    "PyYAML>=6.0.1"
 ]
 
 [dependency-groups]
