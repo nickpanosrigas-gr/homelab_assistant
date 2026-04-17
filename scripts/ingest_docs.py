@@ -11,7 +11,6 @@ from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams
 
-# Import your settings configuration
 from src.config.settings import settings
 
 # Configure logging
@@ -19,7 +18,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Collection name as specified in your architecture docs
-COLLECTION_NAME = "homelab_assistant"
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 def process_markdown_files() -> List[Document]:
@@ -97,10 +95,10 @@ def main():
     )
     
     # Ensure collection exists; Nomic embed text uses 768 dimensions
-    if not client.collection_exists(COLLECTION_NAME):
-        logger.info(f"Creating new Qdrant collection: {COLLECTION_NAME}")
+    if not client.collection_exists(settings.QDRANT_COLLECTION_NAME):
+        logger.info(f"Creating new Qdrant collection: {settings.QDRANT_COLLECTION_NAME}")
         client.create_collection(
-            collection_name=COLLECTION_NAME,
+            collection_name=settings.QDRANT_COLLECTION_NAME,
             vectors_config=VectorParams(size=768, distance=Distance.COSINE),
         )
 
@@ -113,7 +111,7 @@ def main():
         embeddings,
         url=settings.QDRANT_URL,
         api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None,
-        collection_name=COLLECTION_NAME,
+        collection_name=settings.QDRANT_COLLECTION_NAME,
         force_recreate=True # Set to False in production if you only want to append
     )
     
