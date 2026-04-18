@@ -9,20 +9,31 @@ from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# --- Defined Literals for Strict LLM Typing ---
+DomainType = Literal["docker_stack", "lxc", "physical_network", "proxmox_host", "vm"]
+ResourceIdType = Literal["110", "120", "130", "200", "210", "220", "host", "network_infrastructure"]
+ContentTypeType = Literal["config_file", "docker_compose", "documentation", "network_topology", "script"]
+IpAddressType = Literal["192.168.1.100", "192.168.1.110", "192.168.1.120", "192.168.1.130", "192.168.1.200", "192.168.1.210", "192.168.1.220"]
+ServiceNameType = Literal["ai", "bios", "cloudflare-ddns", "cloudflared", "cosmote", "cudy", "dns", "docker", "gaming", "gpu_passthrough", "grafana", "grub", "influxdb", "jellyfin", "langfuse", "linuxdocker", "loki", "media", "navidrome", "nginx", "nginx-proxy-manager", "nvidia", "ollama", "open-webui", "promtail", "proxmox", "qdrant", "technitium", "technitiumdns", "telegraf", "truenas", "ubuntu", "vfio", "whisper", "windows", "wireguard", "zfs", "zte"]
+# ----------------------------------------------
+
 def query_knowledge(
     query: str,
-    search_size: str = "normal",
-    domain: Optional[str] = None,
-    resource_id: Optional[int] = None,
-    service_name: Optional[str] = None,
-    ip_address: Optional[str] = None,
-    content_type: Optional[str] = None
+    search_size: Literal["normal", "large"] = "normal",
+    domain: Optional[DomainType] = None,
+    resource_id: Optional[ResourceIdType] = None,
+    service_name: Optional[ServiceNameType] = None,
+    ip_address: Optional[IpAddressType] = None,
+    content_type: Optional[ContentTypeType] = None
 ) -> str:
     """
     Queries the Home Lab knowledge base for runbooks, Docker Compose files, and network topology.
     Use the optional parameters to strictly filter the results based on known attributes.
     """
     print(f"\n[DEBUG QDRANT] AI requested knowledge base query: '{query}' (Size: {search_size})")
+    
+    # Explicitly log the filters LLM chose to apply
+    print(f"[DEBUG QDRANT] Applied Filters -> domain: {domain} | resource_id: {resource_id} | service_name: {service_name} | ip_address: {ip_address} | content_type: {content_type}")
     
     try:
         # 1. Initialize Embeddings (Must match the ingestion model)
@@ -47,8 +58,12 @@ def query_knowledge(
         must_conditions = []
         if domain:
             must_conditions.append(models.FieldCondition(key="metadata.domain", match=models.MatchValue(value=domain)))
+            
         if resource_id:
-            must_conditions.append(models.FieldCondition(key="metadata.resource_id", match=models.MatchValue(value=resource_id)))
+            # Safely convert numeric strings back to integers for Qdrant
+            parsed_id = int(resource_id) if resource_id.isdigit() else resource_id
+            must_conditions.append(models.FieldCondition(key="metadata.resource_id", match=models.MatchValue(value=parsed_id)))
+            
         if service_name:
             must_conditions.append(models.FieldCondition(key="metadata.service_names", match=models.MatchValue(value=service_name)))
         if ip_address:
@@ -59,7 +74,7 @@ def query_knowledge(
         qdrant_filter = models.Filter(must=must_conditions) if must_conditions else None
 
         if must_conditions:
-            print(f"[DEBUG QDRANT] Applying {len(must_conditions)} exact-match filters.")
+            print(f"[DEBUG QDRANT] Applying {len(must_conditions)} exact-match filters to vector search.")
 
         # 4. Set Limits based on search_size
         k = 8 if search_size == "large" else 3
@@ -74,9 +89,18 @@ def query_knowledge(
             filter=qdrant_filter
         )
 
+        if not results and qdrant_filter is not None:
+            print(f"[DEBUG QDRANT] 0 results found with strict filters. Automatically retrying semantic search WITHOUT filters...")
+            results = vector_store.max_marginal_relevance_search(
+                query=query,
+                k=k,
+                fetch_k=fetch_k,
+                filter=None # Drop all filters
+            )
+
         if not results:
-            print(f"[DEBUG QDRANT] No results found.")
-            return f"No documentation found in the knowledge base matching query: '{query}' and provided filters."
+            print(f"[DEBUG QDRANT] No results found even after fallback.")
+            return f"No documentation found in the knowledge base matching query: '{query}'."
 
         print(f"[DEBUG QDRANT] Retrieved {len(results)} diverse chunks. Formatting output...")
 
@@ -90,7 +114,7 @@ def query_knowledge(
             source = doc.metadata.get("source_file", "Unknown Source")
             section = doc.metadata.get("Section") or doc.metadata.get("Sub-Section") or "General"
             
-            # --- ADDED DEBUG CONSOLE PRINT HERE ---
+            # Print to console for debugging
             print(f"[DEBUG QDRANT] Match {i+1} -> ID: {point_id} | Source: {source}")
             
             output.append(f"\n[RESULT {i+1} | ID: {point_id} | Source: {source} | Section: {section}]")

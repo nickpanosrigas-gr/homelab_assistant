@@ -7,6 +7,14 @@ from src.tools.telemetry import telemetry as fetch_telemetry
 from src.tools.truenas import truenas as fetch_truenas
 from src.tools.qdrant import query_knowledge
 
+# --- Defined Literals for Strict LLM Typing ---
+DomainType = Literal["docker_stack", "lxc", "physical_network", "proxmox_host", "vm"]
+ResourceIdType = Literal["110", "120", "130", "200", "210", "220", "host", "network_infrastructure"]
+ContentTypeType = Literal["config_file", "docker_compose", "documentation", "network_topology", "script"]
+IpAddressType = Literal["192.168.1.100", "192.168.1.110", "192.168.1.120", "192.168.1.130", "192.168.1.200", "192.168.1.210", "192.168.1.220"]
+ServiceNameType = Literal["ai", "bios", "cloudflare-ddns", "cloudflared", "cosmote", "cudy", "dns", "docker", "gaming", "gpu_passthrough", "grafana", "grub", "influxdb", "jellyfin", "langfuse", "linuxdocker", "loki", "media", "navidrome", "nginx", "nginx-proxy-manager", "nvidia", "ollama", "open-webui", "promtail", "proxmox", "qdrant", "technitium", "technitiumdns", "telegraf", "truenas", "ubuntu", "vfio", "whisper", "windows", "wireguard", "zfs", "zte"]
+# ----------------------------------------------
+
 # Instantiate clients that require it
 ping_client = PingClient()
 
@@ -39,11 +47,11 @@ def truenas(timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
 def qdrant(
     query: str,
     search_size: Literal["normal", "large"] = "normal",
-    domain: Optional[str] = None,
-    resource_id: Optional[int] = None,
-    service_name: Optional[str] = None,
-    ip_address: Optional[str] = None,
-    content_type: Optional[str] = None
+    domain: Optional[DomainType] = None,
+    resource_id: Optional[ResourceIdType] = None,
+    service_name: Optional[ServiceNameType] = None,
+    ip_address: Optional[IpAddressType] = None,
+    content_type: Optional[ContentTypeType] = None
 ) -> str:
     """
     RAG Knowledge Engine. Queries the Qdrant vector database for local knowledge base context.

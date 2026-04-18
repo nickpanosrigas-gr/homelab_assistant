@@ -2,9 +2,9 @@ import re
 import requests
 import telebot
 import threading
-import ast  # Imported to safely parse stringified dictionaries
+import ast  
 from src.config.settings import settings
-from src.bot.whisper_stt import transcribe_audio  # Import the new transcription module
+from src.bot.whisper_stt import transcribe_audio  
 
 # Initialize the bot object using your token
 bot = telebot.TeleBot(settings.TELEGRAM_BOT_TOKEN)
@@ -26,10 +26,19 @@ def clean_markdown_for_telegram(text: str) -> str:
     if not text:
         return text
         
-    # --- NEW FIX: Handle bullet points BEFORE formatting ---
+    # --- NEW FIXES FOR TELEGRAM MARKDOWN STABILITY ---
+    
+    # 1. Replace horizontal rules (---, ***, ___) with a safe Unicode line
+    text = re.sub(r'^\s*[-*_]{3,}\s*$', '━━━━━━━━━━━━━━━━━━━━', text, flags=re.MULTILINE)
+    
+    # 2. Escape underscores in snake_case words (like intel_iommu) to prevent italic parser crashes
+    text = re.sub(r'([a-zA-Z0-9])_([a-zA-Z0-9])', r'\1\\_\2', text)
+
+    # 3. Handle bullet points (covers both asterisks and hyphens)
     text = re.sub(r'^(\s*)\*\s+', r'\1• ', text, flags=re.MULTILINE)
+    text = re.sub(r'^(\s*)-\s+', r'\1• ', text, flags=re.MULTILINE)
         
-    # 1. Handle standard Markdown to Telegram Markdown conversions
+    # 4. Handle Headers & Bold text
     text = re.sub(r'\*\*(.*?)\*\*', r'*\1*', text)
     text = re.sub(r'^###\s+(.*)', r'*\1*', text, flags=re.MULTILINE)
     text = re.sub(r'^##\s+(.*)', r'*\1*', text, flags=re.MULTILINE)
@@ -53,7 +62,8 @@ def clean_markdown_for_telegram(text: str) -> str:
                 if i == 0:
                     card_lines.append(f"🔹 *{col_val}*")
                 else:
-                    card_lines.append(f"   ▫️ _{header_name}:_ {col_val}")
+                    # Switched from underscores (italics) to asterisks (bold) for stability
+                    card_lines.append(f"   ▫️ *{header_name}:* {col_val}")
             cards.append("\n".join(card_lines))
         return ["\n" + "\n\n".join(cards) + "\n"]
 
