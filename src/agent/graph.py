@@ -1,5 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import MemorySaver
 
 from src.config.settings import settings
 from src.agent.state import AssistantState
@@ -33,11 +34,14 @@ tools = [
     qdrant
 ]
 
+memory = MemorySaver()
+
 # create_react_agent automatically compiles the StateGraph, 
 # wiring the tools and LLM together using the ReAct pattern.
 app = create_react_agent(
     model=llm,
     tools=tools,
     prompt=MAIN_AGENT_SYSTEM_PROMPT,
-    state_schema=AssistantState # Preserves your custom context_data fields
+    state_schema=AssistantState, # Preserves your custom context_data fields
+    checkpointer=memory
 )
