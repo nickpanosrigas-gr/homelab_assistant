@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     # Whisper
     WHISPER_API_URL: str
     WHISPER_MODEL: str
+    WHISPER_LANGUAGE: str
     
     # Gemini
     GOOGLE_API_KEY: str

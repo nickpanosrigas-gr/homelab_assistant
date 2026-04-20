@@ -9,7 +9,7 @@ from src.config.settings import settings
 # -----------------------------------------------------------------------------
 # Configuration: Define which services live where
 # -----------------------------------------------------------------------------
-PROXMOX_LXC_SERVICES = ['jellyfin', 'technitium', 'ollama']
+PROXMOX_LXC_SERVICES = ['jellyfin', 'technitium', 'ollama', 'whisper']
 DOCKER_SERVICES = ['navidrome', 'vaultwarden', 'wireguard', 'nginx']
 
 def mask_dynamic_data(log_message: str) -> str:
@@ -233,4 +233,4 @@ def telemetry(service_name: str, timeframe: Literal['1h', '24h', '7d'] = '24h') 
     return FusedTelemetryAggregator().run(service_name, timeframe)
 
 if __name__ == "__main__":
-    print(telemetry("navidrome","7d"))
+    print(telemetry("ollama","1h"))

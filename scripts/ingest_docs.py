@@ -44,19 +44,28 @@ def process_markdown_files() -> List[Document]:
             filename = os.path.basename(file_path)
             
             # OPTIMIZATION: Generate a deterministic ID based on the filename.
-            # This ensures that updating a file overwrites its old chunk in Qdrant 
-            # instead of creating a duplicate.
             doc_id = hashlib.md5(filename.encode()).hexdigest()
             
             # Append reference metadata
             metadata["source_file"] = filename
             metadata["_id"] = doc_id 
             
-            # 2. Create the final Langchain Document (No splitting)
+            # --- NEW FIX: BAKE METADATA INTO THE EMBEDDING TEXT ---
+            domain = metadata.get("domain", "Unknown")
+            services = ", ".join(metadata.get("service_names", []))
+            hardware = ", ".join(metadata.get("hardware_dependencies", []))
+            
+            enriched_content = f"Document Domain: {domain}\n"
+            enriched_content += f"Services: {services}\n"
+            enriched_content += f"Hardware: {hardware}\n"
+            enriched_content += f"---\n{content}"
+            # ------------------------------------------------------
+
+            # 2. Create the final Langchain Document using the enriched text
             doc = Document(
-                page_content=content, 
+                page_content=enriched_content, 
                 metadata=metadata,
-                id=doc_id # Explicitly pass the ID to LangChain
+                id=doc_id 
             )
             documents.append(doc)
                 
@@ -101,17 +110,16 @@ def main():
     # 4. Ingest into Vector Store
     logger.info(f"Pushing {len(docs)} documents to Qdrant...")
     
-    # OPTIMIZATION: Extract the deterministic IDs to pass to from_documents
     doc_ids = [doc.id for doc in docs]
     
     QdrantVectorStore.from_documents(
         docs,
         embeddings,
-        ids=doc_ids, # Pass the IDs to Qdrant
+        ids=doc_ids,
         url=settings.QDRANT_URL,
         api_key=settings.QDRANT_API_KEY if settings.QDRANT_API_KEY else None,
         collection_name=settings.QDRANT_COLLECTION_NAME,
-        force_recreate=False # Set to False so we update (upsert) instead of wipe
+        force_recreate=False 
     )
     
     logger.info("✅ Ingestion complete! Knowledge base is updated and ready for retrieval.")

@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 # --- Defined Literals for Strict LLM Typing ---
 DomainType = Literal["docker_stack", "lxc", "physical_network", "proxmox_host", "vm"]
-ResourceIdType = Literal["110", "120", "130", "200", "210", "220", "host", "network_infrastructure"]
+ResourceIdType = Literal["110", "120", "130", "200", "210", "220", "230", "host", "network_infrastructure"]
 ContentTypeType = Literal["config_file", "docker_compose", "documentation", "network_topology", "script"]
-IpAddressType = Literal["192.168.1.100", "192.168.1.110", "192.168.1.120", "192.168.1.130", "192.168.1.200", "192.168.1.210", "192.168.1.220"]
+IpAddressType = Literal["192.168.1.100", "192.168.1.110", "192.168.1.120", "192.168.1.130", "192.168.1.200", "192.168.1.210", "192.168.1.220", "192.168.1.230"]
 ServiceNameType = Literal["ai", "bios", "cloudflare-ddns", "cloudflared", "cosmote", "cudy", "dns", "docker", "gaming", "gpu_passthrough", "grafana", "grub", "influxdb", "jellyfin", "langfuse", "linuxdocker", "loki", "media", "navidrome", "nginx", "nginx-proxy-manager", "nvidia", "ollama", "open-webui", "promtail", "proxmox", "qdrant", "technitium", "technitiumdns", "telegraf", "truenas", "ubuntu", "vfio", "whisper", "windows", "wireguard", "zfs", "zte"]
 # ----------------------------------------------
 
@@ -27,8 +27,17 @@ def query_knowledge(
     content_type: Optional[ContentTypeType] = None
 ) -> str:
     """
-    Queries the Home Lab knowledge base for runbooks, Docker Compose files, and network topology.
-    Use the optional parameters to strictly filter the results based on known attributes.
+    Queries the Home Lab knowledge base for runbooks, Docker Compose files, network topology, and configurations.
+    
+    GUIDELINES FOR SEARCH CAPABILITIES & FILTERS (CRITICAL):
+    - You MUST attempt to map the user's request to the exact metadata filters (`domain`, `resource_id`, `service_name`) if they match the literal types provided.
+    - Example: If the user asks about "Proxmox GPU Passthrough", apply the `service_name="gpu_passthrough"` or `domain="proxmox_host"` filters. 
+    - Example: If the user asks about "Grafana dashboard", apply `service_name="grafana"`.
+    - If a search with strict filters returns no results, the tool will automatically fallback to an unfiltered semantic search.
+    
+    SEARCH SIZE CONFIGURATION:
+    - 'normal': Fetches the top 5 chunks. Use for highly targeted, specific queries.
+    - 'large': Fetches the top 10 chunks. Use for broad questions spanning multiple services or when initial searches fail to return the complete picture.
     """
     print(f"\n[DEBUG QDRANT] AI requested knowledge base query: '{query}' (Size: {search_size})")
     
@@ -77,32 +86,30 @@ def query_knowledge(
             print(f"[DEBUG QDRANT] Applying {len(must_conditions)} exact-match filters to vector search.")
 
         # 4. Set Limits based on search_size
-        k = 8 if search_size == "large" else 3
-        fetch_k = k * 2 
+        k = 5 if search_size == "normal" else 10
 
-        # 5. Execute MMR Search
-        print(f"[DEBUG QDRANT] Executing MMR search for top {k} results...")
-        results = vector_store.max_marginal_relevance_search(
+        # 5. Execute Standard Similarity Search
+        print(f"[DEBUG QDRANT] Executing standard similarity search for top {k} results...")
+        results = vector_store.similarity_search(
             query=query,
             k=k,
-            fetch_k=fetch_k,
             filter=qdrant_filter
         )
 
+        # Fallback to unfiltered search
         if not results and qdrant_filter is not None:
             print(f"[DEBUG QDRANT] 0 results found with strict filters. Automatically retrying semantic search WITHOUT filters...")
-            results = vector_store.max_marginal_relevance_search(
+            results = vector_store.similarity_search(
                 query=query,
                 k=k,
-                fetch_k=fetch_k,
-                filter=None # Drop all filters
+                filter=None 
             )
 
         if not results:
             print(f"[DEBUG QDRANT] No results found even after fallback.")
             return f"No documentation found in the knowledge base matching query: '{query}'."
 
-        print(f"[DEBUG QDRANT] Retrieved {len(results)} diverse chunks. Formatting output...")
+        print(f"[DEBUG QDRANT] Retrieved {len(results)} chunks. Formatting output...")
 
         # 6. Format the output efficiently for the LLM Context Window
         output = ["--- RETRIEVED KNOWLEDGE BASE CONTEXT ---"]

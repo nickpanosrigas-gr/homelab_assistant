@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.bot.telegram_app import start_bot_daemon
+# Import the ingestion script's main function
+from scripts.ingest_docs import main as ingest_knowledge_base
 
 # Configure basic logging for the console
 logging.basicConfig(
@@ -19,8 +21,15 @@ def main():
     logger.info("Hardware constraints active: Will connect to local Ollama LXC.")
     
     try:
+        # Run the RAG ingestion at startup
+        logger.info("Executing startup task: Knowledge Base Ingestion...")
+        ingest_knowledge_base()
+        logger.info("Knowledge Base Ingestion completed successfully.")
+        
         # Start the blocking Telegram polling loop
+        logger.info("Starting Telegram Bot Daemon...")
         start_bot_daemon()
+        
     except KeyboardInterrupt:
         logger.info("\nCaught KeyboardInterrupt. Shutting down gracefully...")
         sys.exit(0)

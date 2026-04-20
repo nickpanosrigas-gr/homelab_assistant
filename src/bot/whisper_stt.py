@@ -3,7 +3,7 @@ from src.config.settings import settings
 
 def transcribe_audio(audio_bytes: bytes, filename: str = "voice_message.ogg") -> str:
     """
-    Sends audio bytes to the local Speaches (Whisper) API for transcription.
+    Sends audio bytes to the local Faster-Whisper API for transcription.
     """
     url = settings.WHISPER_API_URL
     
@@ -13,12 +13,14 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "voice_message.ogg") ->
     }
     
     data = {
-        # This string tells Speaches exactly which folder to load from your disk!
-        'model': settings.WHISPER_MODEL
+        # This matches the 'model_size: str = Form(...)' in our FastAPI server
+        'model_size': settings.WHISPER_MODEL,
+        # This explicitly tells the API to skip auto-detect and use English
+        'language': settings.WHISPER_LANGUAGE
     }
     
     try:
-        # Give it a 60-second timeout just in case it takes a moment to load the model into memory
+        # 60-second timeout allows time to load large-v3 into VRAM for the first time
         response = requests.post(url, files=files, data=data, timeout=60)
         response.raise_for_status()
         

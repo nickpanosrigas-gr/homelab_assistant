@@ -58,8 +58,15 @@ def qdrant(
     Use this to find Docker Compose files, Proxmox scripts, application runbooks, network 
     topology, and general homelab setup information.
     
-    Use the optional parameters to strictly filter the results based on known attributes.
-    Set search_size to 'large' (8 results) if you need extensive context, otherwise leave as 'normal' (3 results).
+    GUIDELINES FOR SEARCH CAPABILITIES & FILTERS (CRITICAL):
+    - You MUST attempt to map the user's request to the exact metadata filters (`domain`, `resource_id`, `service_name`) if they match the literal types provided.
+    - Example: If the user asks about "Proxmox GPU Passthrough", apply the `service_name="gpu_passthrough"` or `domain="proxmox_host"` filters. 
+    - Example: If the user asks about "Grafana dashboard", apply `service_name="grafana"`.
+    - If a search with strict filters returns no results, the tool will automatically fallback to an unfiltered semantic search.
+    
+    SEARCH SIZE CONFIGURATION:
+    - 'normal': Fetches the top 5 chunks. Use for highly targeted, specific queries.
+    - 'large': Fetches the top 10 chunks. Use for broad questions spanning multiple services or when initial searches fail to return the complete picture.
     """
     return query_knowledge(
         query=query,
