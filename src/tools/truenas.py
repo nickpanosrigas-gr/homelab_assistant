@@ -1,34 +1,30 @@
 import time
-import requests
+import json
 import yaml
 import re
-import concurrent.futures
-from datetime import datetime, timezone, timedelta
-from typing import Literal, Dict, List, Any
+import uuid
+import ssl
+from datetime import datetime, timezone
+from typing import Literal, Dict, List, Tuple
+from websockets.sync.client import connect
+from influxdb_client import InfluxDBClient
 from src.config.settings import settings
 
 # -----------------------------------------------------------------------------
-# Hardware Topology & Thermal Thresholds
+# Hardware Topology & Thermal Thresholds (Mapped by Serial Number)
 # -----------------------------------------------------------------------------
-# Python 3.7+ retains dictionary order, so this exact order will be printed
 DISK_TOPOLOGY = {
-    "sdf": {"warn": 45.0, "err": 50.0, "desc": "sdf Exos 16TB HDD Mirror0"},
-    "sdd": {"warn": 45.0, "err": 50.0, "desc": "sdd Sky 16TB HDD Mirror0"},
-    "sde": {"warn": 45.0, "err": 50.0, "desc": "sde Sky 14TB HDD Mirror1"},
-    "sdc": {"warn": 45.0, "err": 50.0, "desc": "sdc WD 14TB HDD Mirror1"},
-    "sdb": {"warn": 55.0, "err": 65.0, "desc": "sdb 500GB SSD Cache0"},
+    "ZL2E93XC": {"warn": 45.0, "err": 50.0, "desc": "Exos 16TB HDD Mirror0"},
+    "ZL20BWD1": {"warn": 45.0, "err": 50.0, "desc": "Sky 16TB HDD Mirror0"},
+    "ZHZ68HBX": {"warn": 45.0, "err": 50.0, "desc": "Sky 14TB HDD Mirror1"},
+    "81G05VWV": {"warn": 45.0, "err": 50.0, "desc": "WD 14TB HDD Mirror1"},
+    "2335E872859D": {"warn": 55.0, "err": 65.0, "desc": "500GB SSD Cache0"},
 }
 DEFAULT_THRESHOLDS = {"warn": 45.0, "err": 50.0, "desc": "Unknown Disk"}
 
 class TrueNASTelemetryAggregator:
-    def __init__(self):
-        self.base_url = f"http://{settings.TRUENAS_URL}/api/v2.0"
-        self.headers = {
-            "Authorization": f"Bearer {settings.TRUENAS_API_KEY}",
-            "Content-Type": "application/json"
-        }
-
-    def _get_time_params(self, timeframe: str) -> tuple[int, int, str]:
+        
+    def _get_time_params(self, timeframe: str) -> Tuple[int, int, str]:
         now = time.time()
         mapping = {
             '1h': (3600, 300, "5m"),
@@ -39,189 +35,222 @@ class TrueNASTelemetryAggregator:
         start_sec = int(now - duration)
         return start_sec, window_sec, window_str
 
-    def fetch_pools_and_disks(self) -> Dict[str, str]:
-        """Fetches general storage health and calculates FREE / TOTAL capacity."""
-        print(f"[DEBUG TRUENAS] Fetching storage pool capacities and disk topologies...")
-        baseline_info = {}
-        try:
-            pools_resp = requests.get(f"{self.base_url}/pool", headers=self.headers, timeout=10)
-            if pools_resp.status_code == 200:
-                for p in pools_resp.json():
-                    data_vdevs = p.get("topology", {}).get("data", [])
-                    size_tb = sum(v.get("stats", {}).get("size", 0) for v in data_vdevs) / (1024**4)
-                    alloc_tb = sum(v.get("stats", {}).get("allocated", 0) for v in data_vdevs) / (1024**4)
-                    
-                    # Calculate true free space
-                    free_tb = size_tb - alloc_tb
-                    status = p.get("status", "UNKNOWN")
-                    
-                    baseline_info[f"Pool_{p.get('name')}"] = f"{free_tb:.2f}TB free / {size_tb:.2f}TB total ({status})"
-
-            disks_resp = requests.get(f"{self.base_url}/disk", headers=self.headers, timeout=10)
-            if disks_resp.status_code == 200:
-                disks = disks_resp.json()
-                baseline_info["Physical_Disks"] = f"{len(disks)} Disks Detected (S.M.A.R.T. Active)"
-                
-            print(f"[DEBUG TRUENAS] Successfully retrieved pool/disk baseline data.")
-        except Exception as e:
-            print(f"[ERROR TRUENAS BASELINE] {e}")
-            baseline_info["API_Error"] = str(e)
-            
-        return baseline_info
-
-    def fetch_temps(self, start_sec: int, window_sec: int) -> tuple[Dict[str, float], Dict[int, Dict[str, float]]]:
-        print(f"[DEBUG TRUENAS] Fetching TrueNAS disk temperatures & generating aggregates...")
-        now = time.time()
-        baseline_avg = {}
-        bucket_max = {}
+    def _call_ws(self, ws, method: str, params: List = None):
+        """Helper to execute synchronous JSON-RPC calls over the WebSocket."""
+        call_id = str(uuid.uuid4())
+        ws.send(json.dumps({
+            "id": call_id,
+            "msg": "method",
+            "method": method,
+            "params": params or []
+        }))
         
-        try:
-            live_resp = requests.post(f"{self.base_url}/disk/temperatures", headers=self.headers, json={}, timeout=10)
-            raw_live_temps = live_resp.json() if live_resp.status_code == 200 else {}
+        while True:
+            resp_text = ws.recv()
+            resp = json.loads(resp_text)
             
-            live_temps = {d: float(t) for d, t in raw_live_temps.items() if t is not None}
-            disks = list(live_temps.keys())
-            
-            if not disks:
-                return {}, {}
-
-            start_str = f"now-{int((now - start_sec) / 3600)}h" 
-            payload = {
-                "graphs": [{"name": "disktemp", "identifier": d} for d in disks],
-                "reporting_query": {"start": start_str, "end": "now", "aggregate": True}
-            }
-            report_resp = requests.post(f"{self.base_url}/reporting/get_data", headers=self.headers, json=payload, timeout=15)
-            
-            if report_resp.status_code != 200:
-                return live_temps, {} 
-
-            sums = {}
-            counts = {}
-            buckets_raw = {}
-
-            for item in report_resp.json():
-                disk = item.get("identifier")
-                for point in item.get("data", []):
-                    if not point or len(point) < 2 or point[1] is None: continue
-                    ts, temp = point[0], float(point[1])
-                    if ts < start_sec: continue
-
-                    sums[disk] = sums.get(disk, 0) + temp
-                    counts[disk] = counts.get(disk, 0) + 1
-
-                    bucket_ts = (int(ts) // window_sec) * window_sec
-                    if bucket_ts not in buckets_raw: buckets_raw[bucket_ts] = {}
-                    if disk not in buckets_raw[bucket_ts]: buckets_raw[bucket_ts][disk] = []
-                    buckets_raw[bucket_ts][disk].append(temp)
-
-            baseline_avg = {d: round(sums[d]/counts[d], 1) for d in sums if counts[d] > 0}
-            bucket_max = {ts: {d: max(temps) for d, temps in disks_dict.items() if temps} for ts, disks_dict in buckets_raw.items()}
-
-            print(f"[DEBUG TRUENAS] Analyzed temperatures for {len(disks)} disks across reporting buckets.")
-        except Exception as e:
-            print(f"[ERROR TRUENAS TEMPS] {e}")
-            
-        return baseline_avg, bucket_max
-
-    def fetch_alerts(self, start_sec: int) -> List[Dict]:
-        print(f"[DEBUG TRUENAS] Fetching active TrueNAS system alerts...")
-        logs = []
-        try:
-            resp = requests.get(f"{self.base_url}/alert/list", headers=self.headers, timeout=10)
-            if resp.status_code != 200: return logs
-            
-            for a in resp.json():
-                if a.get("dismissed"): continue
-                
-                raw_level = a.get("level", "WARNING")
-                if raw_level == "WARNING": level = "WARN"
-                elif raw_level == "CRITICAL": level = "FATAL"
-                else: level = raw_level
-
-                dt_dict = a.get("datetime", {})
-                ts_ms = dt_dict.get("$date", time.time() * 1000)
-                ts_sec = ts_ms / 1000
-                
-                if ts_sec < start_sec:
-                    ts_sec = start_sec
-                    
-                raw_msg = a.get("formatted", "Unknown Alert")
-                clean_msg = re.sub(r'<[^>]+>', ' ', raw_msg) 
-                clean_msg = re.sub(r'\s+', ' ', clean_msg).strip() 
-                
-                logs.append({
-                    "ts_sec": ts_sec,
-                    "level": level,
-                    "message": clean_msg
-                })
-            print(f"[DEBUG TRUENAS] Parsed {len(logs)} active alerts from system.")
-        except Exception as e:
-            print(f"[ERROR TRUENAS ALERTS] {e}")
-            
-        return logs
+            if resp.get("id") == call_id:
+                if "error" in resp:
+                    raise Exception(f"API Error ({method}): {resp['error']}")
+                return resp.get("result")
 
     def run(self, timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
         print(f"\n[DEBUG TRUENAS] AI requested TrueNAS telemetry (Timeframe: {timeframe})")
         start_sec, window_sec, window_str = self._get_time_params(timeframe)
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            f_pools = executor.submit(self.fetch_pools_and_disks)
-            f_temps = executor.submit(self.fetch_temps, start_sec, window_sec)
-            f_alerts = executor.submit(self.fetch_alerts, start_sec)
-            
-            baseline_info = f_pools.result()
-            baseline_avg_temps, bucket_max_temps = f_temps.result()
-            active_alerts = f_alerts.result()
+        # Build WebSocket URL directly from settings
+        base_url = settings.TRUENAS_URL
+        ws_protocol = "wss" if base_url.startswith("https://") else "ws"
+        if "://" in base_url:
+            base_url = base_url.split("://")[1]
+        ws_url = f"{ws_protocol}://{base_url}/websocket"
+        
+        baseline_info = {}
+        disk_mapping = {}
+        baseline_avg_temps = {}
+        baseline_max_temps = {}
+        bucket_max_temps = {}
+        active_alerts = []
 
-        print(f"[DEBUG TRUENAS] All data streams retrieved. Synthesizing timeline and thermal anomalies...")
+        try:
+            # -----------------------------------------------------------------
+            # PHASE 1: TRUENAS WEBSOCKETS (Pools, Disks, Alerts)
+            # -----------------------------------------------------------------
+            print(f"[DEBUG TRUENAS] Connecting to {ws_url}...")
+            
+            ssl_context = None
+            if ws_url.startswith("wss://"):
+                ssl_context = ssl.create_default_context()
+                ssl_context.check_hostname = False
+                ssl_context.verify_mode = ssl.CERT_NONE
+
+            with connect(ws_url, max_size=None, ssl=ssl_context) as ws:
+                ws.send(json.dumps({"msg": "connect", "version": "1", "support": ["1"]}))
+                while True:
+                    resp = json.loads(ws.recv())
+                    if resp.get("msg") == "connected":
+                        break
+                
+                print("[DEBUG TRUENAS] Authenticating...")
+                auth_res = self._call_ws(ws, "auth.login_with_api_key", [settings.TRUENAS_API_KEY])
+                if not auth_res:
+                    raise Exception("WebSocket Authentication failed. Check API Key.")
+
+                print("[DEBUG TRUENAS] Fetching storage pools...")
+                pools = self._call_ws(ws, "pool.query")
+                for p in pools:
+                    data_vdevs = p.get("topology", {}).get("data", [])
+                    size_tb = sum(v.get("stats", {}).get("size", 0) for v in data_vdevs) / (1024**4)
+                    alloc_tb = sum(v.get("stats", {}).get("allocated", 0) for v in data_vdevs) / (1024**4)
+                    free_tb = size_tb - alloc_tb
+                    baseline_info[f"Pool_{p.get('name')}"] = f"{free_tb:.2f}TB free / {size_tb:.2f}TB total ({p.get('status', 'UNKNOWN')})"
+
+                print("[DEBUG TRUENAS] Mapping physical disk topologies...")
+                disks = self._call_ws(ws, "disk.query")
+                
+                # Exclude the VM host drive (scsi0) from the mapping entirely
+                valid_disks = [d for d in disks if "scsi0" not in d.get("name", "") and "scsi0" not in d.get("serial", "")]
+                
+                baseline_info["Physical_Disks"] = f"{len(valid_disks)} Disks Detected"
+                for d in valid_disks:
+                    disk_mapping[d.get("name")] = d.get("serial", "UNKNOWN_SERIAL")
+
+                print("[DEBUG TRUENAS] Fetching active system alerts...")
+                alerts_raw = self._call_ws(ws, "alert.list")
+                for a in alerts_raw:
+                    if a.get("dismissed"): continue
+                    raw_level = a.get("level", "WARNING")
+                    level = "WARN" if raw_level == "WARNING" else "FATAL" if raw_level == "CRITICAL" else raw_level
+
+                    dt_dict = a.get("datetime", {})
+                    ts_ms = dt_dict.get("$date", time.time() * 1000)
+                    ts_sec = ts_ms / 1000
+                    if ts_sec < start_sec: ts_sec = start_sec
+                        
+                    raw_msg = a.get("formatted", "Unknown Alert")
+                    clean_msg = re.sub(r'<[^>]+>', ' ', raw_msg) 
+                    clean_msg = re.sub(r'\s+', ' ', clean_msg).strip() 
+                    
+                    active_alerts.append({"ts_sec": ts_sec, "level": level, "message": clean_msg})
+
+            # -----------------------------------------------------------------
+            # PHASE 2: INFLUXDB (Thermal Metrics)
+            # -----------------------------------------------------------------
+            print(f"[DEBUG TRUENAS] Connecting to InfluxDB for thermal data at {settings.INFLUXDB_URL}...")
+            client = InfluxDBClient(
+                url=settings.INFLUXDB_URL, 
+                token=settings.INFLUXDB_TOKEN, 
+                org=settings.INFLUXDB_ORG
+            )
+            query_api = client.query_api()
+
+            # Flux query: Grabs any measurement containing 'truenas' and 'temp' 
+            # and gets the maximum value grouped into intervals.
+            flux_query = f"""
+            from(bucket: "{settings.INFLUXDB_DOCKER_BUCKET}")
+              |> range(start: -{timeframe})
+              |> filter(fn: (r) => r["_measurement"] =~ /truenas/ and r["_measurement"] =~ /temp/)
+              |> aggregateWindow(every: {window_str}, fn: max, createEmpty: false)
+              |> yield(name: "max")
+            """
+            
+            tables = query_api.query(flux_query)
+            
+            sums = {}
+            counts = {}
+            buckets_raw = {}
+            
+            for table in tables:
+                for record in table.records:
+                    measurement = record.get_measurement()
+                    val = record.get_value()
+                    if val is None: continue
+                        
+                    ts = int(record.get_time().timestamp())
+                    
+                    # Smart Matching against our valid_disks mapping
+                    matched_serial = None
+                    for sdx, serial in disk_mapping.items():
+                        if serial in measurement or sdx in measurement:
+                            matched_serial = serial
+                            break
+                            
+                    if not matched_serial:
+                        continue # Skip metrics for unmapped disks (like scsi0)
+                        
+                    # Aggregate into buckets
+                    bucket_ts = (ts // window_sec) * window_sec
+                    if bucket_ts not in buckets_raw: buckets_raw[bucket_ts] = {}
+                    if matched_serial not in buckets_raw[bucket_ts]: buckets_raw[bucket_ts][matched_serial] = []
+                    buckets_raw[bucket_ts][matched_serial].append(val)
+
+            # Process InfluxDB aggregates into baselines and timelines
+            for ts, serial_dict in buckets_raw.items():
+                bucket_max_temps[ts] = {}
+                for serial, temps in serial_dict.items():
+                    max_t = max(temps)
+                    bucket_max_temps[ts][serial] = max_t
+                    
+                    sums[serial] = sums.get(serial, 0) + max_t
+                    counts[serial] = counts.get(serial, 0) + 1
+                    baseline_max_temps[serial] = max(baseline_max_temps.get(serial, 0), max_t)
+
+            baseline_avg_temps = {s: round(sums[s]/counts[s], 1) for s in sums if counts[s] > 0}
+            print(f"[DEBUG TRUENAS] Successfully pulled InfluxDB data for {len(baseline_avg_temps)} mapped disks.")
+
+        except Exception as e:
+            print(f"[ERROR TRUENAS / INFLUX] {e}")
+            return f"Error executing TrueNAS/InfluxDB Telemetry: {e}"
+
+        print(f"[DEBUG TRUENAS] Synthesizing timeline and thermal anomalies...")
 
         global_baseline = {**baseline_info}
         
-        # Build the exact ordered temperatures map
+        # Build human-readable baseline temperatures using the topology map
         if baseline_avg_temps:
             ordered_temps = {}
-            # 1. Map known disks in the precise order specified in DISK_TOPOLOGY
-            for d_id, d_info in DISK_TOPOLOGY.items():
-                if d_id in baseline_avg_temps:
-                    ordered_temps[d_info["desc"]] = f"{baseline_avg_temps[d_id]} C"
+            for serial, d_info in DISK_TOPOLOGY.items():
+                if serial in baseline_avg_temps:
+                    avg_t = baseline_avg_temps[serial]
+                    max_t = baseline_max_temps.get(serial, avg_t)
+                    key_str = f"{serial} {d_info['desc']}"
+                    ordered_temps[key_str] = {"avg": f"{avg_t} C", "max": f"{max_t} C"}
             
-            # 2. Safely catch any other unknown disks so they don't disappear
-            for d_id, temp in baseline_avg_temps.items():
-                if d_id not in DISK_TOPOLOGY:
-                    desc = f"{d_id} (Unknown)"
-                    ordered_temps[desc] = f"{temp} C"
+            # Catch any remaining disks that sent temps but aren't explicitly in the Topology Dictionary
+            for serial, avg_t in baseline_avg_temps.items():
+                if serial not in DISK_TOPOLOGY:
+                    max_t = baseline_max_temps.get(serial, avg_t)
+                    key_str = f"{serial} (Unmapped in Topology)"
+                    ordered_temps[key_str] = {"avg": f"{avg_t} C", "max": f"{max_t} C"}
                     
-            global_baseline["Disk_Temp_Averages"] = ordered_temps
+            global_baseline["Disk_Temperatures"] = ordered_temps
 
         timeline = {}
 
+        # Evaluate thresholds
         for ts, disks_dict in bucket_max_temps.items():
             dt = datetime.fromtimestamp(ts, timezone.utc)
             bucket_key = dt.strftime("%Y-%m-%d %H:%M:%S")
-            
             anomalies = {}
             temp_events = []
             
-            for disk, max_temp in disks_dict.items():
-                thresholds = DISK_TOPOLOGY.get(disk, DEFAULT_THRESHOLDS)
-                warn_limit = thresholds["warn"]
-                err_limit = thresholds["err"]
-                desc = thresholds["desc"]
+            for disk_serial, max_temp in disks_dict.items():
+                thresholds = DISK_TOPOLOGY.get(disk_serial, DEFAULT_THRESHOLDS)
                 
-                if max_temp >= err_limit:
-                    anomalies[f"Temp_{desc}_max"] = f"{max_temp} C"
+                if max_temp >= thresholds["err"]:
+                    anomalies[f"Temp_{disk_serial}_max"] = f"{max_temp} C"
                     temp_events.append({
                         "time": dt.strftime("%H:%M:%S"),
                         "level": "FATAL",
-                        "message": f"THERMAL ALERT: {desc} exceeded critical limit: {max_temp} C (Threshold: {err_limit} C)",
+                        "message": f"THERMAL ALERT: {disk_serial} ({thresholds['desc']}) exceeded critical limit: {max_temp} C",
                         "occurrences": 1
                     })
-                elif max_temp >= warn_limit:
-                    anomalies[f"Temp_{desc}_max"] = f"{max_temp} C"
+                elif max_temp >= thresholds["warn"]:
+                    anomalies[f"Temp_{disk_serial}_max"] = f"{max_temp} C"
                     temp_events.append({
                         "time": dt.strftime("%H:%M:%S"),
                         "level": "WARN",
-                        "message": f"THERMAL WARNING: {desc} running hot: {max_temp} C (Threshold: {warn_limit} C)",
+                        "message": f"THERMAL WARNING: {disk_serial} ({thresholds['desc']}) running hot: {max_temp} C",
                         "occurrences": 1
                     })
                     
@@ -232,10 +261,10 @@ class TrueNASTelemetryAggregator:
                     if "infrastructure_anomalies" not in timeline[bucket_key]:
                         timeline[bucket_key]["infrastructure_anomalies"] = {}
                     timeline[bucket_key]["infrastructure_anomalies"].update(anomalies)
-                    
                 if temp_events:
                     timeline[bucket_key]["log_events"].extend(temp_events)
 
+        # Merge in System Alerts
         for alert in active_alerts:
             ts_sec = alert["ts_sec"]
             dt = datetime.fromtimestamp(ts_sec, timezone.utc)
@@ -245,7 +274,6 @@ class TrueNASTelemetryAggregator:
             
             if bucket_key not in timeline:
                 timeline[bucket_key] = {"bucket": bucket_key, "log_events": []}
-                
             if "log_events" not in timeline[bucket_key]:
                 timeline[bucket_key]["log_events"] = []
                 
@@ -257,7 +285,6 @@ class TrueNASTelemetryAggregator:
             })
 
         final_timeline = []
-        ignored_count = 0
         total_possible_buckets = int((time.time() - start_sec) / window_sec)
         
         for k, v in sorted(timeline.items()):
@@ -287,6 +314,4 @@ def truenas(timeframe: Literal['1h', '24h', '7d'] = '24h') -> str:
 
 if __name__ == "__main__":
     print("--- TEST 1: TrueNAS 24-Hour Telemetry ---")
-    print(truenas("24h"))
-    print("\n--- TEST 2: TrueNAS 1-Hour Telemetry ---")
     print(truenas("1h"))

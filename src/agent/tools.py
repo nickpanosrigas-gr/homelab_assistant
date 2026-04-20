@@ -6,6 +6,7 @@ from src.tools.ping import PingClient
 from src.tools.telemetry import telemetry as fetch_telemetry
 from src.tools.truenas import truenas as fetch_truenas
 from src.tools.qdrant import query_knowledge
+from src.tools.trend_analyzer import analyze_trends as fetch_trends
 
 # --- Defined Literals for Strict LLM Typing ---
 DomainType = Literal["docker_stack", "lxc", "physical_network", "proxmox_host", "vm"]
@@ -77,3 +78,14 @@ def qdrant(
         ip_address=ip_address,
         content_type=content_type
     )
+    
+@tool
+def trend_analyzer() -> str:
+    """
+    The Macro Daily Digest Engine. Call this tool ONLY when providing a daily summary or 
+    when asked about long-term server health and trends.
+    It automatically performs a live ping sweep of all core services, analyzes 30-day TrueNAS 
+    thermal drift, storage velocity, and counts Docker stack ERROR logs over the last 24 hours.
+    Outputs a highly compressed YAML summary.
+    """
+    return fetch_trends()
