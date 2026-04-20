@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from src.config.settings import settings
 from src.agent.state import AssistantState
-from src.agent.tools import ping, telemetry, truenas, qdrant
+from src.agent.tools import ping, telemetry, truenas, qdrant, trend_analyzer
 
 MAIN_AGENT_SYSTEM_PROMPT = """You are the Home Lab AIOps Assistant, a highly capable, read-only AI agent managing a Proxmox and Docker-based home lab environment.
 
@@ -20,7 +20,6 @@ CORE RULES & BEHAVIORS:
 """
 
 # --- Google Gemini Setup ---
-# Leveraging Gemini 3.1 Flash Lite as per the Master Architecture
 llm = ChatGoogleGenerativeAI(
     model=settings.GEMINI_MODEL,
     google_api_key=settings.GOOGLE_API_KEY
@@ -31,7 +30,8 @@ tools = [
     ping,
     telemetry,
     truenas,
-    qdrant
+    qdrant,
+    trend_analyzer
 ]
 
 memory = MemorySaver()
@@ -42,6 +42,6 @@ app = create_react_agent(
     model=llm,
     tools=tools,
     prompt=MAIN_AGENT_SYSTEM_PROMPT,
-    state_schema=AssistantState, # Preserves your custom context_data fields
+    state_schema=AssistantState,
     checkpointer=memory
 )
